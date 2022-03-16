@@ -1,0 +1,27 @@
+[package]
+edition = "2018"
+readme = "README.md"
+name = "demo-pinetime"
+version = "0.1.0"
+
+[features]
+itm = ["panic-itm", "kern/klog-itm"]
+semihosting = ["panic-semihosting", "kern/klog-semihosting"]
+
+[dependencies]
+cortex-m = {version = "0.7", features = ["inline-asm"]}
+cortex-m-rt = "0.6.12"
+panic-itm = { version = "0.4.1", optional = true }
+panic-halt = { version = "0.2.0", optional = true }
+panic-semihosting = { version = "0.5.3", optional = true }
+nrf52832-pac = { version = "0.11.0" }
+
+[dependencies.kern]
+path = "../../sys/kern"
+default-features = false
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "demo-pinetime"
+test = false
+bench = false

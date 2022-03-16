@@ -166,7 +166,7 @@ pub fn config(board: &str) -> anyhow::Result<FlashConfig> {
         "stm32f3-discovery" | "stm32f4-discovery" | "nucleo-h743zi2"
         | "nucleo-h753zi" | "stm32h7b3i-dk" | "gemini-bu-1" | "gimletlet-1"
         | "gimletlet-2" | "gimlet-a" | "gimlet-b" | "psc-1" | "sidecar-1"
-        | "stm32g031" | "stm32g070" | "stm32g0b1" => {
+        | "stm32g031" | "stm32g070" | "stm32g0b1" | "pinetime" => {
             let (dir, file) = if board == "stm32f3-discovery" {
                 ("demo-stm32f4-discovery", "openocd-f3.cfg")
             } else if board == "stm32f4-discovery" {
@@ -177,6 +177,8 @@ pub fn config(board: &str) -> anyhow::Result<FlashConfig> {
                 ("demo-stm32g0-nucleo", "openocd.cfg")
             } else if board == "stm32g0b1" {
                 ("demo-stm32g0-nucleo", "openocd.cfg")
+            } else if board == "pinetime" {
+                ("demo-pinetime", "openocd.cfg")
             } else if board == "gemini-bu-1" {
                 ("gemini-bu", "openocd.cfg")
             } else if board == "gimletlet-2" {

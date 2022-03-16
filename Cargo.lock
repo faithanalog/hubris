@@ -501,6 +501,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76fbd10dce159c002b9c688ae8ab7cd531151e185e0ad360f4bfea3b0eede3a8"
 
 [[package]]
+name = "demo-pinetime"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "kern",
+ "nrf52832-pac",
+ "panic-halt",
+ "panic-itm",
+ "panic-semihosting",
+]
+
+[[package]]
 name = "demo-stm32f4-discovery"
 version = "0.1.0"
 dependencies = [
@@ -1711,6 +1724,16 @@ dependencies = [
  "memchr",
  "minimal-lexical",
  "version_check",
+]
+
+[[package]]
+name = "nrf52832-pac"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e649284d1cde4aef5c43ea32588553cfd31a9b7ce5fccdac98f012399382c33a"
+dependencies = [
+ "cortex-m",
+ "vcell",
 ]
 
 [[package]]

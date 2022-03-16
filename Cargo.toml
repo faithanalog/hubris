@@ -23,6 +23,7 @@ members = [
     "app/demo-stm32f4-discovery",
     "app/demo-stm32g0-nucleo",
     "app/demo-stm32h7-nucleo",
+    "app/demo-pinetime",
     "app/gemini-bu",
     "app/gemini-bu-rot",
     "app/gimlet",
