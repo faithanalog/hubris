@@ -1,17 +1,17 @@
-# none of this is true
-[usart2]
-address = 0x40004400
-size = 1024
-interrupts = { irq = 38 }
-
-[rcc]
-address = 0x40021000
+[uart0]
+address = 0x40002000
 size = 1024
 
-[gpioa]
-address = 0x48000000
+# this is also twim0
+[spi0]
+address = 0x40003000
 size = 1024
 
-[gpioe]
-address = 0x48001000
+# this is also spi1
+[twim1]
+address = 0x40004000
+size = 1024
+
+[gpio]
+address = 0x50000000
 size = 1024

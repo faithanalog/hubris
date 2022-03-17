@@ -1,5 +1,7 @@
 target extended-remote :3333
 
+set remotetimeout 30000
+
 # print demangled symbols
 set print asm-demangle on
 
@@ -9,7 +11,7 @@ set backtrace limit 32
 # detect unhandled exceptions, hard faults and panics
 break HardFault
 
-monitor arm semihosting enable
+monitor arm semihosting disable
 
 # # send captured ITM to the file itm.fifo
 # # (the microcontroller SWO pin must be connected to the programmer SWO pin)
