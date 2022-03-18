@@ -1,0 +1,39 @@
+[package]
+name = "drv-nrf52832-spi-server"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+userlib = {path = "../../sys/userlib", features = ["panic-messages"]}
+ringbuf = {path = "../../lib/ringbuf"}
+zerocopy = "0.6.1"
+num-traits = { version = "0.2.12", default-features = false }
+drv-nrf52832-spi = {path = "../nrf52832-spi", default-features = false}
+#drv-stm32xx-sys-api = {path = "../stm32xx-sys-api", default-features = false}
+drv-spi-api = {path = "../spi-api", default-features = false}
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+nrf52832-pac = { version = "0.11.0", default-features = false }
+cfg-if = "0.1.10"
+idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
+
+[build-dependencies]
+build-util = {path = "../../build/util"}
+idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
+serde = "1"
+quote = "1"
+call_rustfmt = {path = "../../build/call_rustfmt"}
+syn = {version = "1", features = ["parsing"]}
+proc-macro2 = "1"
+indexmap = "1.7"
+
+[features]
+spi1 = []
+spi2 = []
+spi3 = []
+
+# This section is here to discourage RLS/rust-analyzer from doing test builds,
+# since test builds don't work for cross compilation.
+[[bin]]
+name = "drv-nrf52832-spi-server"
+test = false
+bench = false

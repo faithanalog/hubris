@@ -829,6 +829,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "drv-nrf52832-spi"
+version = "0.1.0"
+dependencies = [
+ "nrf52832-pac",
+ "num-traits",
+ "ringbuf",
+ "vcell",
+ "zerocopy",
+]
+
+[[package]]
+name = "drv-nrf52832-spi-server"
+version = "0.1.0"
+dependencies = [
+ "build-util",
+ "call_rustfmt",
+ "cfg-if 0.1.10",
+ "cortex-m",
+ "drv-nrf52832-spi",
+ "drv-spi-api",
+ "idol",
+ "idol-runtime",
+ "indexmap",
+ "nrf52832-pac",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "ringbuf",
+ "serde",
+ "syn",
+ "userlib",
+ "zerocopy",
+]
+
+[[package]]
 name = "drv-onewire"
 version = "0.1.0"
 dependencies = [

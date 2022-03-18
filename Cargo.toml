@@ -82,6 +82,9 @@ members = [
     "drv/lpc55-spi-server",
     "drv/lpc55-rng",
 
+    "drv/nrf52832-spi",
+    "drv/nrf52832-spi-server",
+
     "drv/user-leds",
     "drv/user-leds-api",
     "drv/ice40-spi-program",

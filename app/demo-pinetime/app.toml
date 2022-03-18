@@ -65,6 +65,32 @@ stacksize = 1536
 #interrupts = {"usart2.irq" = 1}
 #task-slots = ["rcc_driver"]
 
+[tasks.spi_driver]
+path = "../../drv/nrf52832-spi-server"
+name = "drv-nrf52832-spi-server"
+priority = 2
+requires = {flash = 16384, ram = 2048}
+features = ["spi1"]
+uses = ["spi1"]
+start = true
+interrupts = {"spi1.irq" = 1}
+stacksize = 880
+task-slots = ["sys"]
+
+[tasks.spi_driver.config.spi]
+global_config = "spi1"
+
+#[tasks.usart_driver]
+#path = "../../drv/nRF52832-usart"
+#name = "drv-nRF52832-usart"
+#features = []
+#priority = 2
+#requires = {flash = 8192, ram = 1024}
+#uses = ["usart2", "gpioa"]
+#start = true
+#interrupts = {"usart2.irq" = 1}
+#task-slots = ["rcc_driver"]
+
 
 #[tasks.ping]
 #path = "../../task/ping"
