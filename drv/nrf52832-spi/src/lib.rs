@@ -4,16 +4,59 @@
 
 //! A driver for the nRF52832 SPI, in host mode.
 //!
-//! This is the core logic, separated from the IPC server. The peripheral also
-//! supports I2S, which we haven't bothered implementing because we don't have a
-//! need for it.
+//! This is the core logic, separated from the IPC server.
+//!
+//! The nRF52 has a very simple SPI compared to some other MCUs.
 //!
 //! # Clocking
 //!
 //! tick tock tick tock tick tock tick tock
 //!
+//! The FREQUENCY register allows the following pre-determined speeds, with
+//! no further divisions:
+//!
+//! - 125KHz
+//! - 250KHz
+//! - 500KHz
+//! - 1MHz
+//! - 2MHz
+//! - 4MHz
+//! - 8MHz
+//!
+//!
+//! # Transfer size
+//!
+//! nRF52 SPI only allows transimitting 8 bits at a time. It's also
+//! double-buffered, which for us just means we get 8 SPI-clock cycles of
+//! leeway in the code timing if we want to hit max throughput, which should
+//! be plenty.
+//!
+//!
+//! # Interrupt Control
+//!
+//! Interrupts are turned on by writing 1 to INTENSET and turned off by
+//! writing 1 to INTENCLR, which is a different register. why? ask Nordic.
+//!
+//! 
+//! # Pin Selection
+//!
+//! The SPI can use any pins 0-31 for any function. This differs from other
+//! controllers, which often have specific pins tied to specific SPI devices.
+//! Thus, the desired SPI pins are passed in as part of initialization
+//!
+//!
+//! # Register Initialization
+//!
+//! The SPI shares some address space with other peripherals (like TWI).
+//! Nordic recommends fully intializing all SPI-related registers, as values
+//! are not reset when changing the peripheral mode.
+//!
+//!
+//! # Why we use spi0 in the code
+//!
 //! We use spi0 for everything because its the only actual spi module. the pac
 //! crate just re-exports spi0 as spi1/spi2 so you can use those as aliases.
+//! The register block is really what determines which spi we're using.
 
 #![no_std]
 
@@ -30,63 +73,63 @@ impl From<&'static device::spi0::RegisterBlock> for Spi {
 }
 
 impl Spi {
+
+    // We take miso/mosi/sck as u32 instead of the respective WHATEVER_A
+    // types because the WHATEVER_A enums only have the disconnected
+    // value in them.
     pub fn initialize(
         &mut self,
-        bits_per_frame: u8,
+        frequency: device::spi0::frequency::FREQUENCY_A,
         order: device::spi0::config::ORDER_A,
         cpha: device::spi0::config::CPHA_A,
         cpol: device::spi0::config::CPOL_A,
+        miso_pin :: u32,
+        mosi_pin :: u32,
+        sck_pin :: u32
     ) {
         // Expected preconditions:
         // - GPIOs configured to proper AF etc - we cannot do this, because we
         // cannot presume to have either direct GPIO access _or_ IPC access.
-        // - Clock on, reset off - again, we can't do this directly.
+        // - Other peripherals sharing the SPI device's address space have
+        // been turned off if they were previously in use.
 
-        // TODO ARTY why is 4 the minimum here? this was taken from another module. is 4 the lowest
-        // nrf can handle? whats up
-        assert!(bits_per_frame >= 4 && bits_per_frame <= 32);
+        // nRF52832 only has 32 pins, pin selection must be in range 0-31
+        assert!(miso_pin >= 0 && miso_pin <= 31);
+        assert!(mosi_pin >= 0 && mosi_pin <= 31);
+        assert!(sck_pin >= 0 && sck_pin <= 31);
 
-        // Write CFG1/CFG2 to configure
-        // TODO ARTY do we need to replace this
-//        self.reg
-//            .config
-//            .write(|w| w.mbr().variant(mbr).dsize().bits(bits_per_frame - 1));
 
-        // arty - is this interrupts or some shit
-        self.reg.cr1.write(|w| w.ssi().set_bit());
+        // We need to initialize the whole register block
+        // we clear events register in case there's stuff left over
+        self.reg.events_ready.write(|w| w.bits(0));
+        self.reg.intenclr.write(|w| w.intenclr().clear());
+        self.reg.enable.write(|w| w.enable().disabled());
+        self.reg.psel.miso.write(|w| w.pselsck().bits(miso_pin));
+        self.reg.psel.mosi.write(|w| w.pselsck().bits(mosi_pin));
+        self.reg.psel.sck.write(|w| w.pselsck().bits(sck_pin));
+        self.reg.frequency.write(|w| w.frequency().variant(frequency));
 
         #[rustfmt::skip]
         self.reg.config.write(|w| {
             w
-                // arty - what the fuck is SS
-                // This bit determines if software manages SS (SSM = 1) or
-                // hardware (SSM = 0). We are doing software.
-                .ssm().set_bit()
-                // SS output disabled.
-                .ssoe().enabled()
-                // Don't glitch pins when being reconfigured.
-                .afcntr().controlled()
-                // This is currently a host-only driver.
-                .master().set_bit()
-                .lsbfrst().variant(lsbfrst)
+                .order().variant(order)
                 .cpha().variant(cpha)
                 .cpol().variant(cpol)
-                .ssom().variant(ssom)
         });
-
-        self.reg.i2scfgr.write(|w| w.i2smod().clear_bit());
     }
 
-    pub fn enable(&mut self, tsize: u16, div: device::spi0::config::MBR_A) {
-        self.reg.config.modify(|_, w| w.mbr().variant(div));
-        self.reg.cr2.modify(|_, w| w.tsize().bits(tsize));
-        self.reg.cr1.modify(|_, w| w.spe().set_bit());
+    pub fn enable(&mut self) {
+        self.reg.enable.modify(|_, w| w.enable().enabled());
+        // TODO anything else?
     }
 
     pub fn start(&mut self) {
-        self.reg.cr1.modify(|_, w| w.cstart().set_bit());
-        // Clear EOT flag
-        self.reg.ifcr.write(|w| w.eotc().set_bit());
+        // I dont know if theres a difference between enabling and starting. maybe
+        // interrupts?
+        // we clear events register in case there's stuff left over. should we
+        // do that here? i dunno.
+        self.reg.events_ready.write(|w| w.bits(0));
+        // TODO anything else?
     }
 
     pub fn can_rx_word(&self) -> bool {
