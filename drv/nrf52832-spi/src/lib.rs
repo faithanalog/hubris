@@ -8,6 +8,15 @@
 //!
 //! The nRF52 has a very simple SPI compared to some other MCUs.
 //!
+//! # First, a note on DMA
+//!
+//! the nRF52 has a version of SPI that uses DMA. it's better than this. we
+//! should use it. I got most of the way through implementing this using the
+//! non-DMA interface so I'm going to keep going but it's worse than the DMA
+//! version would be and requires the SPI task to do things after every byte
+//! of transmission. The non-DMA version is also considered "deprecated", but
+//! I don't know what that actually implies for Nordic stuff.
+//!
 //! # Clocking
 //!
 //! tick tock tick tock tick tock tick tock
@@ -24,18 +33,32 @@
 //! - 8MHz
 //!
 //!
-//! # Transfer size
+//! # Double Buffering
 //!
 //! nRF52 SPI only allows transimitting 8 bits at a time. It's also
-//! double-buffered, which for us just means we get 8 SPI-clock cycles of
+//! double-buffered, which for us means we get 8 SPI-clock cycles of
 //! leeway in the code timing if we want to hit max throughput, which should
-//! be plenty.
+//! be plenty. However it also impacts how reading data works. At the start
+//! of a transmission, the first byte of data received is delayed by one byte.
+//! Basically, there's three scenarios
+//! - You only want to write data. You just write as normal
+//! - You only want to read data. At the start of transmission you write 2
+//!   bytes without a read inbetween. At the end, you read 2 bytes without
+//!   a write inbetween
+//! - You want to read and write data. You delay reading until after the
+//!   second byte is transmitted.
+//! 
+//! Note also that this affects how the READY event is fired. READY is based
+//! on when valid data is available in the RXD register, so it will not fire
+//! until after writing a second byte into TXD (prompting the first valid byte
+//! to be moved out of the buffer and into RXD).
+//!
 //!
 //!
 //! # Interrupt Control
 //!
 //! Interrupts are turned on by writing 1 to INTENSET and turned off by
-//! writing 1 to INTENCLR, which is a different register. why? ask Nordic.
+//! writing 1 to INTENCLR, which is a different register.
 //!
 //! 
 //! # Pin Selection
@@ -83,30 +106,34 @@ impl Spi {
         order: device::spi0::config::ORDER_A,
         cpha: device::spi0::config::CPHA_A,
         cpol: device::spi0::config::CPOL_A,
-        miso_pin :: u32,
-        mosi_pin :: u32,
-        sck_pin :: u32
+        miso_pin: u32,
+        mosi_pin: u32,
+        sck_pin: u32
     ) {
         // Expected preconditions:
         // - GPIOs configured to proper AF etc - we cannot do this, because we
         // cannot presume to have either direct GPIO access _or_ IPC access.
         // - Other peripherals sharing the SPI device's address space have
-        // been turned off if they were previously in use.
+        // been turned off if they were previously in use. There is a finite
+        // set of other peripherals that share the address space so technically
+        // we could turn them all off here just in case, but we don't right now.
 
         // nRF52832 only has 32 pins, pin selection must be in range 0-31
-        assert!(miso_pin >= 0 && miso_pin <= 31);
-        assert!(mosi_pin >= 0 && mosi_pin <= 31);
-        assert!(sck_pin >= 0 && sck_pin <= 31);
+        assert!(miso_pin <= 31);
+        assert!(mosi_pin <= 31);
+        assert!(sck_pin <= 31);
 
 
         // We need to initialize the whole register block
         // we clear events register in case there's stuff left over
-        self.reg.events_ready.write(|w| w.bits(0));
-        self.reg.intenclr.write(|w| w.intenclr().clear());
+        self.reg.intenclr.write(|w| w.ready().clear());
         self.reg.enable.write(|w| w.enable().disabled());
-        self.reg.psel.miso.write(|w| w.pselsck().bits(miso_pin));
-        self.reg.psel.mosi.write(|w| w.pselsck().bits(mosi_pin));
-        self.reg.psel.sck.write(|w| w.pselsck().bits(sck_pin));
+
+        // bits() calls are unsafe, but that's how you put the data in.
+        self.reg.psel.miso.write(|w| unsafe { w.pselmiso().bits(miso_pin) });
+        self.reg.psel.mosi.write(|w| unsafe { w.pselmosi().bits(mosi_pin) });
+        self.reg.psel.sck.write(|w| unsafe { w.pselsck().bits(sck_pin) });
+
         self.reg.frequency.write(|w| w.frequency().variant(frequency));
 
         #[rustfmt::skip]
@@ -120,169 +147,48 @@ impl Spi {
 
     pub fn enable(&mut self) {
         self.reg.enable.modify(|_, w| w.enable().enabled());
-        // TODO anything else?
     }
 
     pub fn start(&mut self) {
-        // I dont know if theres a difference between enabling and starting. maybe
-        // interrupts?
-        // we clear events register in case there's stuff left over. should we
-        // do that here? i dunno.
-        self.reg.events_ready.write(|w| w.bits(0));
-        // TODO anything else?
+        // Don't actually need to do anything.
     }
 
-    pub fn can_rx_word(&self) -> bool {
-        let sr = self.reg.sr.read();
-        sr.rxwne().bit()
+    pub fn is_read_ready(&self) -> bool {
+        self.reg.events_ready.read().bits() != 0
     }
 
-    pub fn can_rx_byte(&self) -> bool {
-        let sr = self.reg.sr.read();
-        sr.rxwne().bit() || sr.rxplvl().bits() != 0
-    }
-
-    pub fn can_tx_frame(&self) -> bool {
-        let sr = self.reg.sr.read();
-        sr.txp().bit()
-    }
-
-    pub fn send32(&mut self, bytes: u32) {
-        self.reg.txdr.write(|w| w.txdr().bits(bytes));
-    }
-
-    pub fn end_of_transmission(&self) -> bool {
-        let sr = self.reg.sr.read();
-        sr.eot().bit()
-    }
-
-    pub fn set_data_line_swap(&self, flag: bool) {
-        self.reg.config.modify(|_, w| w.ioswp().bit(flag));
-    }
-
-    /// Stuffs one byte of data into the SPI TX FIFO.
+    /// Stuffs one byte of data into the SPI TX register.
     ///
     /// Preconditions:
     ///
-    /// - There must be room for a byte in the TX FIFO (call `can_tx_frame` to
-    ///   check, or call this in response to a TXP interrupt).
+    /// - There must be room for a byte in TXD. There's not really a way to
+    ///   check this, so just, don't mess it up :).
     pub fn send8(&mut self, byte: u8) {
-        // The TXDR register can be accessed as a byte, halfword, or word. This
-        // determines how many bytes are pushed in. stm32h7/svd2rust don't
-        // understand this, and so we have to get a pointer to the byte portion
-        // of the register manually and dereference it.
-
-        // Because svd2rust didn't see this one coming, we cannot get a direct
-        // reference to the VolatileCell within the wrapped Reg type of txdr,
-        // nor will the Reg type agree to give us a pointer to its contents like
-        // VolatileCell will, presumably to save us from ourselves. And thus we
-        // must exploit the fact that VolatileCell is the only (non-zero-sized)
-        // member of Reg, and in fact _must_ be for Reg to work correctly when
-        // used to overlay registers in memory.
-
-        // Safety: "Downcast" txdr to a pointer to its sole member, whose type
-        // we know because of our unholy source-code-reading powers.
-        let txdr: &vcell::VolatileCell<u32> =
-            unsafe { core::mem::transmute(&self.reg.txdr) };
-        // vcell is more pleasant and will happily give us the pointer we want.
-        let txdr: *mut u32 = txdr.as_ptr();
-        // As we are a little-endian machine it is sufficient to change the type
-        // of the pointer to byte.
-        let txdr8 = txdr as *mut u8;
-
-        // Safety: we are dereferencing a pointer given to us by VolatileCell
-        // (and thus UnsafeCell) using the same volatile access it would use.
-        unsafe {
-            txdr8.write_volatile(byte);
-        }
+            // There's no "safe" way to put data into txd. thanks pac crate.
+        self.reg.txd.write(|w| unsafe { w.txd().bits(byte) });
     }
 
-    pub fn recv32(&mut self) -> u32 {
-        self.reg.rxdr.read().rxdr().bits()
-    }
-
-    /// Pulls one byte of data from the SPI RX FIFO.
+    /// Pulls one byte of data from the SPI RX register. Also clears the
+    /// ready event
     ///
     /// Preconditions:
     ///
-    /// - There must be at least one byte of data in the FIFO (check using
-    ///   `has_rx_byte` or call this in response to an RXP interrupt).
-    ///
-    /// - Frame size must be set to 8 bits or smaller. (Behavior if you write a
-    ///   partial frame to the FIFO is not immediately clear from the
-    ///   datasheet.)
+    /// - There must be at least one byte of data in the receive register
+    ///   (check is_read_ready). Otherwise you'll just get some undefined data
     pub fn recv8(&mut self) -> u8 {
-        // The RXDR register can be accessed as a byte, halfword, or word. This
-        // determines how many bytes are pushed in. stm32h7/svd2rust don't
-        // understand this, and so we have to get a pointer to the byte portion
-        // of the register manually and dereference it.
-
-        // See send8 for further rationale / ranting.
-
-        // Safety: "Downcast" rxdr to a pointer to its sole member, whose type
-        // we know because of our unholy source-code-reading powers.
-        let rxdr: &vcell::VolatileCell<u32> =
-            unsafe { core::mem::transmute(&self.reg.rxdr) };
-        // vcell is more pleasant and will happily give us the pointer we want.
-        let rxdr: *mut u32 = rxdr.as_ptr();
-        // As we are a little-endian machine it is sufficient to change the type
-        // of the pointer to byte.
-        let rxdr8 = rxdr as *mut u8;
-
-        // Safety: we are dereferencing a pointer given to us by VolatileCell
-        // (and thus UnsafeCell) using the same volatile access it would use.
-        unsafe { rxdr8.read_volatile() }
+        self.reg.rxd.read().rxd().bits()
     }
 
     pub fn end(&mut self) {
-        // Clear flags that tend to get set during transactions.
-        self.reg.ifcr.write(|w| w.txtfc().set_bit());
-        // Disable the transfer state machine.
-        self.reg.cr1.modify(|_, w| w.spe().clear_bit());
         // Turn off interrupt enables.
-        self.reg.ier.reset();
-
-        // This is where we'd report errors (TODO). For now, just clear the
-        // error flags, as they're sticky.
-        self.reg.ifcr.write(|w| {
-            w.ovrc()
-                .set_bit()
-                .udrc()
-                .set_bit()
-                .modfc()
-                .set_bit()
-                .tifrec()
-                .set_bit()
-        });
+        self.reg.intenclr.write(|w| w.ready().clear());
     }
 
     pub fn enable_transfer_interrupts(&mut self) {
-        self.reg
-            .ier
-            .write(|w| w.txpie().set_bit().rxpie().set_bit().eotie().set_bit());
+        self.reg.intenset.write(|w| w.ready().set());
     }
 
-    pub fn disable_can_tx_interrupt(&mut self) {
-        self.reg.ier.modify(|_, w| w.txpie().clear_bit());
-    }
-
-    pub fn enable_can_tx_interrupt(&mut self) {
-        self.reg.ier.modify(|_, w| w.txpie().set_bit());
-    }
-
-    pub fn check_eot(&self) -> bool {
-        self.reg.sr.read().eot().is_completed()
-    }
-
-    pub fn clear_eot(&mut self) {
-        self.reg.ifcr.write(|w| w.eotc().set_bit());
-    }
-
-    pub fn read_status(&self) -> u32 {
-        self.reg.sr.read().bits()
-    }
-
-    pub fn check_overrun(&self) -> bool {
-        self.reg.sr.read().ovr().is_overrun()
+    pub fn disable_transfer_interrupts(&mut self) {
+        self.reg.intenclr.write(|w| w.ready().clear());
     }
 }
