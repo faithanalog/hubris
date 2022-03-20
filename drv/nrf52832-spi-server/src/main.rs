@@ -22,16 +22,11 @@ use idol_runtime::{
 };
 use ringbuf::*;
 
-#[cfg(feature = "h743")]
-use stm32h7::stm32h743 as device;
-
-#[cfg(feature = "h753")]
-use stm32h7::stm32h753 as device;
+use nrf52832_pac as device;
 
 use userlib::*;
 
-use drv_stm32h7_spi as spi_core;
-use drv_stm32xx_sys_api as sys_api;
+use drv_nrf52832_spi as spi_core;
 
 task_slot!(SYS, sys);
 
@@ -45,8 +40,6 @@ enum Trace {
 }
 
 ringbuf!(Trace, 64, Trace::None);
-
-const IRQ_MASK: u32 = 1;
 
 #[derive(Copy, Clone, Debug)]
 struct LockState {
@@ -62,24 +55,15 @@ fn main() -> ! {
 
     let registers = unsafe { &*CONFIG.registers };
 
-    sys.enable_clock(CONFIG.peripheral);
-    sys.enter_reset(CONFIG.peripheral);
-    sys.leave_reset(CONFIG.peripheral);
     let mut spi = spi_core::Spi::from(registers);
 
-    // This should correspond to '0' in the standard SPI parlance
     spi.initialize(
-        device::spi1::cfg1::MBR_A::DIV64,
-        8,
-        device::spi1::cfg2::COMM_A::FULLDUPLEX,
-        device::spi1::cfg2::LSBFRST_A::MSBFIRST,
-        device::spi1::cfg2::CPHA_A::FIRSTEDGE,
-        device::spi1::cfg2::CPOL_A::IDLELOW,
-        device::spi1::cfg2::SSOM_A::ASSERTED,
+        // TODO
     );
 
     // Configure all devices' CS pins to be deasserted (set).
     // We leave them in GPIO output mode from this point forward.
+    // TODO
     for device in CONFIG.devices {
         sys.gpio_set_reset(device.cs.port, device.cs.pin_mask, 0)
             .unwrap();
@@ -94,20 +78,6 @@ fn main() -> ! {
         )
         .unwrap();
     }
-
-    // Initially, configure mux 0. This keeps us from having to deal with a "no
-    // mux selected" state.
-    //
-    // Note that the config check routine above ensured that there _is_ a mux
-    // option 0.
-    //
-    // We deactivate before activate to avoid pin clash if we previously crashed
-    // with one of these activated.
-    let current_mux_index = 0;
-    for opt in &CONFIG.mux_options[1..] {
-        deactivate_mux_option(&opt, &sys);
-    }
-    activate_mux_option(&CONFIG.mux_options[current_mux_index], &sys, &spi);
 
     let mut server = ServerImpl {
         spi,
@@ -169,6 +139,8 @@ impl InOrderSpiImpl for ServerImpl {
             Some(dest),
         )
     }
+
+    /// Locks the spi device and asserts chip select
     fn lock(
         &mut self,
         rm: &RecvMessage,
@@ -214,6 +186,7 @@ impl InOrderSpiImpl for ServerImpl {
         Ok(())
     }
 
+    /// Unlock the spi device and un-assert chip select
     fn release(
         &mut self,
         rm: &RecvMessage,
@@ -278,75 +251,30 @@ impl ServerImpl {
             .as_ref()
             .map(|leased| LenLimit::len_as_u16(&leased))
             .unwrap_or(0);
-        let overall_len = src_len.max(dest_len);
+        let transfer_size = src_len.max(dest_len);
 
         // Zero-byte SPI transactions don't make sense and we'll
         // decline them.
-        if overall_len == 0 {
+        if transfer_size == 0 {
             return Err(SpiError::BadTransferSize.into());
         }
 
         // We have a reasonable-looking request containing reasonable-looking
         // lease(s). This is our commit point.
+        // arty - what does this mean
         ringbuf_entry!(Trace::Start(op, (src_len, dest_len)));
 
-        // Switch the mux to the requested port.
-        if device.mux_index != self.current_mux_index {
-            deactivate_mux_option(
-                &CONFIG.mux_options[self.current_mux_index],
-                &self.sys,
-            );
-            activate_mux_option(
-                &CONFIG.mux_options[device.mux_index],
-                &self.sys,
-                &self.spi,
-            );
-            // Remember this for later to avoid unnecessary
-            // switching.
-            self.current_mux_index = device.mux_index;
-        }
-
-        // Make sure SPI is on.
-        //
-        // Due to driver limitations we will only move up to 64kiB
-        // per transaction. It would be worth lifting this
-        // limitation, maybe. Doing so would require managing data
-        // in 64kiB chunks (because the peripheral is 16-bit) and
-        // using the "reload" facility on the peripheral.
-        self.spi.enable(overall_len, device.clock_divider);
-
-        // Load transfer count and start the state machine. At this
-        // point we _have_ to move the specified number of bytes
-        // through (or explicitly cancel, but we don't).
+        // Vestigial from stm impl. these don't actually do anything but when
+        // we switch to DMA maybe they will.
+        self.spi.enable();
         self.spi.start();
 
-        // As you might expect, we will work from byte 0 to the end
-        // of each buffer. There are two complications:
-        //
-        // 1. Transmit and receive can be at different positions --
-        //    transmit will tend to lead receive, because the SPI
-        //    unit contains FIFOs.
-        //
-        // 2. We're only keeping track of position in the buffers
-        //    we're using: both tx and rx are `Option`.
-        //
-        // The BufReader/Writer types manage position tracking for us.
-
-        // Wrap a buffer reader/writer onto whichever borrows actually exist.
-        // This lets us amortize the cost of the borrow syscalls for retrieving
-        // data from the caller. It doesn't appear to be useful to make this any
-        // larger than the FIFO depth; for simplicity we set:
         const BUFSIZ: usize = 16;
 
         let mut tx: Option<LeaseBufReader<_, BUFSIZ>> =
             data_src.map(|b| LeaseBufReader::from(b.into_inner()));
         let mut rx: Option<LeaseBufWriter<_, BUFSIZ>> =
             data_dest.map(|b| LeaseBufWriter::from(b.into_inner()));
-
-        // Enable interrupt on the conditions we're interested in.
-        self.spi.enable_transfer_interrupts();
-
-        self.spi.clear_eot();
 
         // We're doing this! Check if we need to control CS.
         let cs_override = self.lock_holder.is_some();
@@ -356,45 +284,69 @@ impl ServerImpl {
                 .unwrap();
         }
 
-        // We use this to exert backpressure on the TX state machine as the RX
-        // FIFO fills. Its initial value is the configured FIFO size, because
-        // the FIFO size varies on SPI blocks on the H7; it would be nice if we
-        // could read the configured FIFO size out of the block, but that does
-        // not appear to be possible.
+
+
+
+        // Reading lags writing by one byte due to double buffering
         //
-        // See reference manual table 409 for details.
-        let mut tx_permits = FIFO_DEPTH;
+        // If the transaction is just one byte, we need to
+        // - write 1 byte
+        // - wait for ready event
+        // - read the real byte.
+        //
+        // If the transaction is two or more bytes we need to
+        // - write 2 bytes
+        // - loop:
+        //  - wait for ready event
+        //  - read 1 byte
+        //  - if bytes_written < transfer_size
+        //      - write one byte
+        //  - if bytes_read == transfer_size
+        //      - break
+        // 
+        // Combined into one, this looks like
+        // - write 1 byte
+        // - loop:
+        //  - if bytes_written < transfer_size
+        //    - write 1 byte
+        //  - wait for ready event
+        //  - read 1 byte
+        //  - if bytes_read == transfer_size
+        //      - break
+        // 
+        // We don't use sleeps/interrupts because it doesn't make sense
+        // right now. We're not using the DMA version of SPI, so we have
+        // to do work after every byte to keep the transaction going. The
+        // overhead of sleeping/interrupting for this just wouldn't make
+        // sense at 8MHz transfer speed.
+        //
+        // It would make sense at slower speeds but at that point we should
+        // just rewrite the underlying SPI implementation to use the DMA
+        // interface at the same time so you don't have weird logic that
+        // uses interrupts sometimes but not other times.
 
-        // Track number of bytes sent and received. Sent bytes will lead
-        // received bytes. Received bytes indicate overall progress and
-        // completion.
-        let mut tx_count = 0;
-        let mut rx_count = 0;
 
-        // The end of the exchange is signaled by rx_count reaching the
-        // overall_len. This is true even if the caller's rx lease is shorter or
-        // missing, because we have to pull bytes from the FIFO to avoid overrun
-        // conditions.
-        while rx_count < overall_len {
-            // At the end of this loop we're going to sleep if there's no
-            // obvious work to be done. Sleeping is not free, so, we only do it
-            // if this flag is set. (It defaults to set, we'll clear it if work
-            // appears below.)
-            let mut should_sleep = true;
+        let mut bytes_read = 0;
+        let mut bytes_written = 0;
 
-            // TX engine. We continue moving bytes while these three conditions
-            // hold:
-            // - More bytes need to be sent.
-            // - Permits are available.
-            // - The TX FIFO has space.
-            while tx_count < overall_len
-                && tx_permits > 0
-                && self.spi.can_tx_frame()
-            {
-                // The next byte to TX will come from the caller, if we haven't
-                // run off the end of their lease, or the fixed padding byte if
-                // we have.
-                let byte = if let Some(txbuf) = &mut tx {
+        let txbyte = if let Some(txbuf) = &mut tx {
+            if let Some(b) = txbuf.read() {
+                b
+            } else {
+                // We've hit the end of the lease. Stop checking.
+                tx = None;
+                0
+            }
+        } else {
+            0
+        };
+        ringbuf_entry!(Trace::Tx(byte));
+        self.spi.send8(byte);
+        bytes_written++;
+
+        while bytes_read < transfer_size {
+            if bytes_written < transfer_size {
+                let txbyte = if let Some(txbuf) = &mut tx {
                     if let Some(b) = txbuf.read() {
                         b
                     } else {
@@ -405,97 +357,29 @@ impl ServerImpl {
                 } else {
                     0
                 };
-
                 ringbuf_entry!(Trace::Tx(byte));
                 self.spi.send8(byte);
-                tx_count += 1;
-
-                // Consume one TX permit to make sure we don't overrun the RX
-                // fifo.
-                tx_permits -= 1;
-
-                if tx_permits == 0 || tx_count == overall_len {
-                    // We're either done, or we need to idle until the RX engine
-                    // catches up. Either way, stop generating interrupts.
-                    self.spi.disable_can_tx_interrupt();
-                }
-
-                // We don't adjust should_sleep in the TX engine because, if we
-                // leave this loop, we've done all the TX work we can -- and
-                // we're about to check for RX work unconditionally below. So,
-                // from the perspective of the TX engine, should_sleep is always
-                // true at this point, and the RX engine gets to make the final
-                // decision.
+                bytes_written++;
             }
 
-            // Drain bytes from the RX FIFO.
-            while self.spi.can_rx_byte() {
-                // We didn't check rx_count < overall_len above because, if we
-                // got to that point, it would mean the SPI hardware gave us
-                // more bytes than we sent. This would be bad. And so, we'll
-                // detect that condition aggressively:
-                if rx_count >= overall_len {
-                    panic!();
-                }
-
-                // Pull byte from RX FIFO.
-                let b = self.spi.recv8();
-                ringbuf_entry!(Trace::Rx(b));
-                rx_count += 1;
-
-                // Allow another byte to be inserted in the TX FIFO.
-                tx_permits += 1;
-
-                // Deposit the byte if we're still within the bounds of the
-                // caller's incoming lease.
-                if let Some(rx_reader) = &mut rx {
-                    if rx_reader.write(b).is_err() {
-                        // We're off the end. Stop checking.
-                        rx = None;
-                    }
-                }
-
-                // By releasing a TX permit, we might have unblocked the TX
-                // engine. We can detect this when tx_permits goes 0->1. If this
-                // occurs, we should turn its interrupt back on, but only if
-                // it's still working.
-                if tx_permits == 1 && tx_count < overall_len {
-                    self.spi.enable_can_tx_interrupt();
-                }
-
-                // We've done some work, which means some time has elapsed,
-                // which means it's possible that room in the TX FIFO has opened
-                // up. So, let's not sleep.
-                should_sleep = false;
+            // spinloop wheeeee
+            while !ready {
             }
 
-            if should_sleep {
-                ringbuf_entry!(Trace::WaitISR(self.spi.read_status()));
+            // read a byte
+            let rxbyte = self.spi.recv8();
+            ringbuf_entry!(Trace::Rx(b));
+            bytes_read++;
 
-                if self.spi.check_overrun() {
-                    panic!();
+            // Deposit the byte if we're still within the bounds of the
+            // caller's incoming lease.
+            if let Some(rx_reader) = &mut rx {
+                if rx_reader.write(rxbyte).is_err() {
+                    // We're off the end. Stop checking.
+                    rx = None;
                 }
-
-                // Allow the controller interrupt to post to our
-                // notification set.
-                sys_irq_control(IRQ_MASK, true);
-                // Wait for our notification set to get, well, set. We ignore
-                // the result of this because an error would mean the kernel
-                // violated the ABI, which we can't usefully respond to.
-                let _ = sys_recv_closed(&mut [], IRQ_MASK, TaskId::KERNEL);
             }
         }
-
-        // Because we've pulled all the bytes from the RX FIFO, we should be
-        // able to observe the EOT condition here.
-        if !self.spi.check_eot() {
-            panic!();
-        }
-        self.spi.clear_eot();
-
-        // Wrap up the transfer and restore things to a reasonable
-        // state.
-        self.spi.end();
 
         // Deassert (set) CS, if we asserted it in the first place.
         if !cs_override {
@@ -508,67 +392,6 @@ impl ServerImpl {
     }
 }
 
-fn deactivate_mux_option(opt: &SpiMuxOption, gpio: &sys_api::Sys) {
-    // Drive all output pins low.
-    for &(pins, _af) in opt.outputs {
-        gpio.gpio_set_reset(pins.port, 0, pins.pin_mask).unwrap();
-        gpio.gpio_configure(
-            pins.port,
-            pins.pin_mask,
-            sys_api::Mode::Output,
-            sys_api::OutputType::PushPull,
-            sys_api::Speed::Low,
-            sys_api::Pull::None,
-            sys_api::Alternate::AF0, // doesn't matter in GPIO mode
-        )
-        .unwrap();
-    }
-    // Switch input pin away from SPI peripheral to a GPIO input, which makes it
-    // Hi-Z.
-    gpio.gpio_configure(
-        opt.input.0.port,
-        opt.input.0.pin_mask,
-        sys_api::Mode::Input,
-        sys_api::OutputType::PushPull, // doesn't matter
-        sys_api::Speed::High,          // doesn't matter
-        sys_api::Pull::None,
-        sys_api::Alternate::AF0, // doesn't matter
-    )
-    .unwrap();
-}
-
-fn activate_mux_option(
-    opt: &SpiMuxOption,
-    gpio: &sys_api::Sys,
-    spi: &spi_core::Spi,
-) {
-    // Apply the data line swap if requested.
-    spi.set_data_line_swap(opt.swap_data);
-    // Switch all outputs to the SPI peripheral.
-    for &(pins, af) in opt.outputs {
-        gpio.gpio_configure(
-            pins.port,
-            pins.pin_mask,
-            sys_api::Mode::Alternate,
-            sys_api::OutputType::PushPull,
-            sys_api::Speed::Low,
-            sys_api::Pull::None,
-            af,
-        )
-        .unwrap();
-    }
-    // And the input too.
-    gpio.gpio_configure(
-        opt.input.0.port,
-        opt.input.0.pin_mask,
-        sys_api::Mode::Alternate,
-        sys_api::OutputType::PushPull, // doesn't matter
-        sys_api::Speed::High,          // doesn't matter
-        sys_api::Pull::None,
-        opt.input.1,
-    )
-    .unwrap();
-}
 
 //////////////////////////////////////////////////////////////////////////////
 // Board-peripheral-server configuration matrix

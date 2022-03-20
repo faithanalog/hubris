@@ -127,7 +127,7 @@ impl Spi {
         // We need to initialize the whole register block
         // we clear events register in case there's stuff left over
         self.reg.intenclr.write(|w| w.ready().clear());
-        self.reg.enable.write(|w| w.enable().disabled());
+        self.reg.enable.write(|w| w.enable().enabled());
 
         // bits() calls are unsafe, but that's how you put the data in.
         self.reg.psel.miso.write(|w| unsafe { w.pselmiso().bits(miso_pin) });
@@ -146,11 +146,12 @@ impl Spi {
     }
 
     pub fn enable(&mut self) {
-        self.reg.enable.modify(|_, w| w.enable().enabled());
+        // Don't actually need to do anything.
     }
 
     pub fn start(&mut self) {
-        // Don't actually need to do anything.
+        // Read a byte just to clear the read event in case its set
+        let _ = self.recv8();
     }
 
     pub fn is_read_ready(&self) -> bool {
@@ -164,7 +165,7 @@ impl Spi {
     /// - There must be room for a byte in TXD. There's not really a way to
     ///   check this, so just, don't mess it up :).
     pub fn send8(&mut self, byte: u8) {
-            // There's no "safe" way to put data into txd. thanks pac crate.
+        // There's no "safe" way to put data into txd. thanks pac crate.
         self.reg.txd.write(|w| unsafe { w.txd().bits(byte) });
     }
 

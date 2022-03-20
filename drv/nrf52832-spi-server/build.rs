@@ -110,29 +110,19 @@ struct Af(usize);
 #[derive(Clone, Debug, Deserialize)]
 struct DeviceDescriptorConfig {
     mux: String,
-    #[serde(default)]
-    clock_divider: ClockDivider,
+    frequency: Frequency,
     cs: GpioPinConfig,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
-enum ClockDivider {
-    DIV2,
-    DIV4,
-    DIV8,
-    DIV16,
-    DIV32,
-    DIV64,
-    DIV128,
-    DIV256,
-}
-
-impl Default for ClockDivider {
-    fn default() -> ClockDivider {
-        // When this config mechanism was introduced, we had everything set at
-        // DIV64 for a ~1.5625 MHz SCK rate.
-        Self::DIV64
-    }
+enum Frequency {
+    KHZ125,
+    KHZ250,
+    KHZ500,
+    MHZ1,
+    MHZ2,
+    MHZ4,
+    MHZ8,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
