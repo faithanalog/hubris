@@ -2,37 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! GPIO-related things needed by all STM32 parts.
+//! GPIO-related things for nRF
+//!
+//! Notably, nRF52 chips only have one GPIO bank, and it doesn't need to
+//! be configured for alternate functions. In contrast with the stm32
+//! code, we use u32 as the pinset directly and only need some cute
+//! enums for mode/output type/speed here
+//!
+//! Also, this is very incomplete. We don't have any support for the
+//! high-drive GPIO modes, for example, or detect/sense. feel free to add it
+//! if you need it, but at the time of writing it's not my priority.
 
 #![no_std]
 
 use userlib::FromPrimitive;
-use zerocopy::AsBytes;
 
-#[cfg(feature = "server-support")]
-pub mod server;
-
-
-/// A `PinSet` can technically be empty (`pin_mask` of zero) but that's rarely
-/// useful.
-#[derive(Copy, Clone, Debug)]
-pub struct PinSet {
-    /// Mask with 1s in affected positions, 0s in others.
-    pub pin_mask: u32,
-}
-
-impl PinSet {
-    /// Derives a `PinSet` by setting mask bit `index`.
-    #[inline(always)]
-    pub const fn and_pin(self, index: usize) -> Self {
-        Self {
-            pin_mask: self.pin_mask | 1 << index,
-            ..self
-        }
-    }
-}
 
 /// Possible modes for a GPIO pin.
+///
+/// Currently doens't implement the analog-ish mode
 #[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
 pub enum Mode {
     /// Digital input. This activates a Schmitt trigger on the pin, which is
@@ -43,45 +31,18 @@ pub enum Mode {
     /// Software-controlled output. Values written to the corresponding bit of
     /// the ODR register will control the pin's driver.
     Output = 0b01,
-    /// Alternate function. This disconnects the direct GPIO driver from the pin
-    /// and instead connects it to the function mux, which in turn connects it
-    /// to a peripheral signal chosen by one of the `AFx` values written to
-    /// AFRL/AFRH.
-    Alternate = 0b10,
-    /// Analog input. This disconnects the output driver, input Schmitt trigger,
-    /// and function mux from the pin, and is the highest-impedance state. It is
-    /// _also_ useful for analog if the pin has an ADC channel attached.
-    Analog = 0b11,
+    /// Input mode, but the input buffer is disconnected. This is as close as
+    /// you get to turning the pin off, and is mainly for power savings
+    DisconnectedInput = 0b10,
 }
 
 /// Drive modes for a GPIO pin.
 #[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
 pub enum OutputType {
-    /// The pin will be driven both high and low in `Output` and `Alternate`
-    /// modes.
+    /// DRIVE = S0S1 (0 = low, 1 = high)
     PushPull = 0,
-    /// Turns off the pin's high side driver in `Output` and `Alternate` modes,
-    /// so that setting the pin to 0 pulls low, but 1 enters a high impedance
-    /// state.
+    /// DRIVE = S0D1 (0 = low, 1 = disconnect)
     OpenDrain = 1,
-}
-
-/// Drive speeds / slew rate limits for GPIO pins.
-///
-/// When in doubt, use `Low`. It's fast enough for most things and is less prone
-/// to generating reflections and EMI. Note that you need to check the datasheet
-/// for the specific part you're targeting to get the actual speeds of these
-/// drive settings. The notes below are thus vague.
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
-pub enum Speed {
-    /// Slowest and generally correct drive speed (up to, say, 10MHz or so).
-    Low = 0b00,
-    /// Somewhat faster (say, 50MHz).
-    Medium = 0b01,
-    /// Somewhat faster-er (idk like 80MHz? Go read the datasheet)
-    High = 0b10,
-    /// Go read the datasheet.
-    VeryHigh = 0b11,
 }
 
 /// Settings for the switchable weak pull resistors on GPIO pins.
@@ -98,37 +59,3 @@ pub enum Pull {
     Down = 0b10,
 }
 
-/// Enumeration of alternate functions that can be stuffed into the AFRL/AFRH
-/// registers to change pin muxes. These only apply when the pin is in
-/// `Alternate` mode.
-///
-/// These are numbers and not, like, convenient human-readable peripheral names
-/// because the mapping from pin + AF to signal is very complex. See the
-/// datasheet.
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
-pub enum Alternate {
-    AF0 = 0,
-    AF1 = 1,
-    AF2 = 2,
-    AF3 = 3,
-    AF4 = 4,
-    AF5 = 5,
-    AF6 = 6,
-    AF7 = 7,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF8 = 8,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF9 = 9,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF10 = 10,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF11 = 11,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF12 = 12,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF13 = 13,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF14 = 14,
-    #[cfg(feature = "has-af8-thru-af15")]
-    AF15 = 15,
-}

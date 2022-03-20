@@ -1,0 +1,47 @@
+// nRF52832 low level GPIO API
+
+Interface(
+    name: "Sys",
+    ops: {
+        "gpio_configure_raw": (
+            args: {
+                "pin": "u8",
+                "config": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("GpioError"),
+            ),
+            idempotent: true,
+        ),
+        "gpio_set_reset": (
+            args: {
+                "set_pins": "u32",
+                "reset_pins": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("GpioError"),
+            ),
+            idempotent: true,
+        ),
+        "gpio_read_input": (
+            args: {
+            },
+            reply: Result(
+                ok: "u32",
+                err: CLike("GpioError"),
+            ),
+            idempotent: true,
+        ),
+        "gpio_toggle": (
+            args: {
+                "pins": "u32",
+            },
+            reply: Result(
+                ok: "()",
+                err: CLike("GpioError"),
+            ),
+        ),
+    },
+)
