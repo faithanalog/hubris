@@ -9,7 +9,7 @@ ringbuf = {path = "../../lib/ringbuf"}
 zerocopy = "0.6.1"
 num-traits = { version = "0.2.12", default-features = false }
 drv-nrf52832-spi = {path = "../nrf52832-spi", default-features = false}
-drv-nrf52832-sys-api = {path = "../nrf52832-sys-api", default-features = false}
+drv-nrf52832-gpio-api = {path = "../nrf52832-gpio-api", default-features = false}
 drv-spi-api = {path = "../spi-api", default-features = false}
 cortex-m = { version = "0.7", features = ["inline-asm"] }
 nrf52832-pac = { version = "0.11.0", default-features = false }

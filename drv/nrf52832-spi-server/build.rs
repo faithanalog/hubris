@@ -10,8 +10,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    build_util::expose_target_board();
+    //build_util::expose_target_board();
 
+    // where the fsck does hubris_task_config come from
     let task_config = build_util::task_config::<TaskConfig>()?;
     let global_config = build_util::config::<GlobalConfig>()?;
     check_spi_config(&global_config.spi, &task_config.spi)?;
@@ -55,74 +56,33 @@ struct GlobalConfig {
 #[derive(Deserialize)]
 struct SpiConfig {
     controller: usize,
-    fifo_depth: Option<usize>,
     mux_options: BTreeMap<String, SpiMuxOptionConfig>,
     devices: IndexMap<String, DeviceDescriptorConfig>,
 }
 
 #[derive(Deserialize)]
 struct SpiMuxOptionConfig {
-    outputs: Vec<AfPinSetConfig>,
-    input: AfPinConfig,
-    #[serde(default)]
-    swap_data: bool,
+    miso_pin: usize,
+    mosi_pin: usize,
+    sck_pin: usize
 }
-
-#[derive(Copy, Clone, Debug, Deserialize)]
-enum ConfigPort {
-    A,
-    B,
-    C,
-    D,
-    E,
-    F,
-    G,
-    H,
-    I,
-    J,
-    K,
-}
-
-#[derive(Deserialize)]
-struct AfPinSetConfig {
-    port: ConfigPort,
-    pins: Vec<usize>,
-    af: Af,
-}
-
-#[derive(Deserialize)]
-struct AfPinConfig {
-    #[serde(flatten)]
-    pc: GpioPinConfig,
-    af: Af,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct GpioPinConfig {
-    port: ConfigPort,
-    pin: usize,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(transparent)]
-struct Af(usize);
 
 #[derive(Clone, Debug, Deserialize)]
 struct DeviceDescriptorConfig {
     mux: String,
     frequency: Frequency,
-    cs: GpioPinConfig,
+    cs: usize,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
 enum Frequency {
-    KHZ125,
-    KHZ250,
-    KHZ500,
-    MHZ1,
-    MHZ2,
-    MHZ4,
-    MHZ8,
+    K125,
+    K250,
+    K500,
+    M1,
+    M2,
+    M4,
+    M8,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -185,28 +145,21 @@ impl ToTokens for SpiConfig {
         // convert it here:
         let device_code = self.devices.values().map(|dev| {
             let mux_index = mux_indices[&dev.mux];
-            let cs = &dev.cs;
-            let div: syn::Ident =
-                syn::parse_str(&format!("{:?}", dev.clock_divider)).unwrap();
+            let cs = dev.cs;
+            let freq: syn::Ident =
+                syn::parse_str(&format!("{:?}", dev.frequency)).unwrap();
             quote::quote! {
                 DeviceDescriptor {
                     mux_index: #mux_index,
                     cs: #cs,
-                    // `spi1` here is _not_ a typo/oversight, the PAC calls all
-                    // SPI types spi1.
-                    clock_divider: device::spi1::cfg1::MBR_A::#div,
+                    frequency: device::spi0::frequency::FREQUENCY_A::#freq,
                 }
             }
         });
 
         let muxes = self.mux_options.values();
 
-        // If the user does not specify a fifo depth, we default to the
-        // _minimum_ on any SPI block on the STM32H7, which is 8.
-        let fifo_depth = self.fifo_depth.unwrap_or(8);
-
         tokens.append_all(quote::quote! {
-            const FIFO_DEPTH: usize = #fifo_depth;
             const CONFIG: ServerConfig = ServerConfig {
                 registers: device::#devname::ptr(),
                 peripheral: sys_api::Peripheral::#pname,
@@ -219,84 +172,19 @@ impl ToTokens for SpiConfig {
 
 impl ToTokens for SpiMuxOptionConfig {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let outputs = &self.outputs;
-        let input = &self.input;
-        let swap_data = self.swap_data;
+        let miso_pin = &self.miso_pin;
+        let mosi_pin = &self.mosi_pin;
+        let sck_pin = &self.sck_pin;
         tokens.append_all(quote::quote! {
             SpiMuxOption {
-                outputs: &[ #(#outputs),* ],
-                input: #input,
-                swap_data: #swap_data,
+                miso_pin: #miso_pin,
+                mosi_pin: #mosi_pin,
+                sck_pin: #sck_pin,
             }
         });
     }
 }
 
-impl ToTokens for ConfigPort {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let port: syn::Ident = syn::parse_str(&format!("{:?}", self)).unwrap();
-        tokens.append_all(quote::quote! {
-            sys_api::Port::#port
-        });
-    }
-}
-
-impl ToTokens for AfPinSetConfig {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let port = self.port;
-        let pins = self.pins.iter().map(|pin| {
-            quote::quote! {
-                (1 << #pin)
-            }
-        });
-        let af = &self.af;
-        tokens.append_all(quote::quote! {
-            (
-                PinSet {
-                    port: #port,
-                    pin_mask: #( #pins )|*,
-                },
-                #af,
-            )
-        });
-    }
-}
-
-impl ToTokens for AfPinConfig {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let pc = &self.pc;
-        let af = &self.af;
-        tokens.append_all(quote::quote! {
-            (
-                #pc,
-                #af,
-            )
-        });
-    }
-}
-
-impl ToTokens for GpioPinConfig {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let port = &self.port;
-        let pin = self.pin;
-        tokens.append_all(quote::quote! {
-            PinSet {
-                port: #port,
-                pin_mask: 1 << #pin,
-            }
-        });
-    }
-}
-
-impl ToTokens for Af {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let name: syn::Ident =
-            syn::parse_str(&format!("AF{}", self.0)).unwrap();
-        tokens.append_all(quote::quote! {
-            sys_api::Alternate::#name
-        });
-    }
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Check routines.
@@ -323,10 +211,9 @@ fn check_spi_config(
     }
 
     for mux in config.mux_options.values() {
-        for out in &mux.outputs {
-            check_afpinset(out)?;
-        }
-        check_afpin(&mux.input)?;
+        check_gpiopin(mux.miso_pin)?;
+        check_gpiopin(mux.mosi_pin)?;
+        check_gpiopin(mux.sck_pin)?;
     }
 
     for (devname, dev) in &config.devices {
@@ -337,53 +224,19 @@ fn check_spi_config(
             )
             .into());
         }
-        check_gpiopin(&dev.cs)?;
+        check_gpiopin(dev.cs)?;
     }
 
-    Ok(())
-}
-
-fn check_afpinset(
-    config: &AfPinSetConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for &pin in &config.pins {
-        if pin > 15 {
-            return Err(format!(
-                "pin {:?}{} is invalid, pins are numbered 0-15",
-                config.port, pin
-            )
-            .into());
-        }
-    }
-    if config.af.0 > 15 {
-        return Err(format!(
-            "af {:?} is invalid, functions are numbered 0-15",
-            config.af
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn check_afpin(config: &AfPinConfig) -> Result<(), Box<dyn std::error::Error>> {
-    check_gpiopin(&config.pc)?;
-    if config.af.0 > 15 {
-        return Err(format!(
-            "af {:?} is invalid, functions are numbered 0-15",
-            config.af
-        )
-        .into());
-    }
     Ok(())
 }
 
 fn check_gpiopin(
-    config: &GpioPinConfig,
+    pin: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if config.pin > 15 {
+    if pin >= 32 {
         return Err(format!(
-            "pin {:?}{} is invalid, pins are numbered 0-15",
-            config.port, config.pin
+            "pin {} is invalid, pins are numbered 0-31",
+            pin
         )
         .into());
     }

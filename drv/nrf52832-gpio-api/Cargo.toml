@@ -1,15 +1,14 @@
 [package]
-name = "drv-nrf52832-gpio"
+name = "drv-nrf52832-gpio-api"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 userlib = {path = "../../sys/userlib"}
 zerocopy = "0.6.1"
-num-traits = { version = "0.2.12", default-features = false }
-nrf52832-pac = { version = "0.11.0", default-features = false }
-idol-runtime = {git = "https://github.com/oxidecomputer/idolatry.git"}
-drv-nrf52832-gpio-api = {path = "../nrf52832-gpio-api"}
+byteorder = {version = "1.3", default-features = false}
+num-traits = {version = "0.2", default-features = false}
+unwrap-lite = {path = "../../lib/unwrap-lite"}
 drv-nrf52832-gpio-common = {path = "../nrf52832-gpio-common"}
 cfg-if = "1"
 
@@ -18,7 +17,6 @@ idol = {git = "https://github.com/oxidecomputer/idolatry.git"}
 
 # This section is here to discourage RLS/rust-analyzer from doing test builds,
 # since test builds don't work for cross compilation.
-[[bin]]
-name = "nrf52832-gpio"
+[lib]
 test = false
 bench = false

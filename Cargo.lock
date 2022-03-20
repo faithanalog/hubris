@@ -829,6 +829,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "drv-nrf52832-gpio-api"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "cfg-if 1.0.0",
+ "drv-nrf52832-gpio-common",
+ "idol",
+ "num-traits",
+ "unwrap-lite",
+ "userlib",
+ "zerocopy",
+]
+
+[[package]]
+name = "drv-nrf52832-gpio-common"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num-traits",
+ "userlib",
+ "zerocopy",
+]
+
+[[package]]
 name = "drv-nrf52832-spi"
 version = "0.1.0"
 dependencies = [
@@ -847,6 +871,7 @@ dependencies = [
  "call_rustfmt",
  "cfg-if 0.1.10",
  "cortex-m",
+ "drv-nrf52832-gpio-api",
  "drv-nrf52832-spi",
  "drv-spi-api",
  "idol",
