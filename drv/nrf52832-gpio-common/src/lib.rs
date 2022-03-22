@@ -16,12 +16,14 @@
 #![no_std]
 
 use userlib::FromPrimitive;
+use zerocopy::AsBytes;
 
 
 /// Possible modes for a GPIO pin.
 ///
-/// Currently doens't implement the analog-ish mode
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+/// Currently doens't implement the analog-ish mode 
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive, AsBytes)]
 pub enum Mode {
     /// Digital input. This activates a Schmitt trigger on the pin, which is
     /// great for receiving digital signals, but can burn a lot of current if
@@ -37,7 +39,8 @@ pub enum Mode {
 }
 
 /// Drive modes for a GPIO pin.
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive, AsBytes)]
 pub enum OutputType {
     /// DRIVE = S0S1 (0 = low, 1 = high)
     PushPull = 0,
@@ -49,7 +52,8 @@ pub enum OutputType {
 ///
 /// Note that the pull resistors apply in all modes, so, you can apply these to
 /// an input, and you will want to turn them off for `Analog`.
-#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive)]
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, FromPrimitive, AsBytes)]
 pub enum Pull {
     /// Both resistors off.
     None = 0b00,

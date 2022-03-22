@@ -202,9 +202,9 @@ fn check_spi_config(
         )
     })?;
 
-    if config.controller < 1 || config.controller > 6 {
+    if config.controller > 2 {
         return Err(format!(
-            "bad controller {}, valid values are 1 thru 6",
+            "bad controller {}, valid values are 0 thru 2",
             config.controller
         )
         .into());

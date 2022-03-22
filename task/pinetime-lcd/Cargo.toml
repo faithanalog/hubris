@@ -1,0 +1,17 @@
+[package]
+name = "task-pinetime-lcd"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+panic-messages = ["userlib/panic-messages"]
+
+[dependencies]
+cortex-m = {version = "0.7", features = ["inline-asm"]}
+userlib = {path = "../../sys/userlib"}
+drv-nrf52832-gpio-api = {path = "../../drv/nrf52832-gpio-api"}
+
+[[bin]]
+name = "task-pinetime-lcd"
+test = false
+bench = false

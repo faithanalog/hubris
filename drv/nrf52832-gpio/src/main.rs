@@ -10,6 +10,11 @@
 use drv_nrf52832_gpio_api::{GpioError};
 use idol_runtime::RequestError;
 use userlib::*;
+use nrf52832_pac as device;
+
+use drv_nrf52832_gpio_common::{
+    Mode, OutputType, Pull
+};
 
 #[export_name = "main"]
 fn main() -> ! {
@@ -20,17 +25,20 @@ fn main() -> ! {
     // concern. Were it literally a static, we could just reference it.
     let p0 = unsafe { &*device::P0::ptr() };
 
-
     // Field messages.
     let mut buffer = [0u8; idl::INCOMING_SIZE];
     let mut server = ServerImpl { p0 };
+
+    //server.gpio_configure_output(23, iface::OutputType::PushPull, iface::Pull::None);
+    //server.gpio_set_reset(0, 1 << 23);
+
     loop {
         idol_runtime::dispatch(&mut buffer, &mut server);
     }
 }
 
 struct ServerImpl<'a> {
-    p0: &'a device::rcc::RegisterBlock,
+    p0: &'a device::p0::RegisterBlock,
 }
 
 impl idl::InOrderSysImpl for ServerImpl<'_> {
@@ -43,7 +51,55 @@ impl idl::InOrderSysImpl for ServerImpl<'_> {
         config: u32,
     ) -> Result<(), RequestError<GpioError>> {
         assert!(pin <= 31);
-        self.p0.pin_cnf[pin].write(|w| unsafe { w.bits(config) });
+        self.p0.pin_cnf[pin as usize].write(|w| unsafe { w.bits(config) });
+        Ok(())
+    }
+
+    /// A delectable gpio configuration experience fit for royalty
+    fn gpio_configure_gourmet(
+        &mut self,
+        _: &RecvMessage,
+        pin: u8,
+        mode: Mode,
+        output_type: OutputType,
+        pull: Pull,
+    ) -> Result<(), RequestError<GpioError>> {
+        assert!(pin <= 31);
+        let dir_a = match mode {
+            Mode::Input | Mode::DisconnectedInput => device::p0::pin_cnf::DIR_A::INPUT,
+            Mode::Output => device::p0::pin_cnf::DIR_A::OUTPUT
+        };
+
+        // I don't think this matters in output mode but might as well
+        // be explicit about it
+        let input_a = match mode {
+            Mode::Input => device::p0::pin_cnf::INPUT_A::CONNECT,
+            Mode::Output | Mode::DisconnectedInput => device::p0::pin_cnf::INPUT_A::DISCONNECT,
+        };
+
+        let pull_a = match pull {
+            Pull::None => nrf52832_pac::p0::pin_cnf::PULL_A::DISABLED,
+            Pull::Up => nrf52832_pac::p0::pin_cnf::PULL_A::PULLUP,
+            Pull::Down => nrf52832_pac::p0::pin_cnf::PULL_A::PULLDOWN,
+        };
+
+        // We should make this more configurable later, but note that it can only handle three
+        // high-drive pins at once so should ensure that somewhere
+        let drive_a = match output_type {
+            OutputType::PushPull => nrf52832_pac::p0::pin_cnf::DRIVE_A::S0S1,
+            OutputType::OpenDrain => nrf52832_pac::p0::pin_cnf::DRIVE_A::S0D1
+        };
+
+        let sense_a = nrf52832_pac::p0::pin_cnf::SENSE_A::DISABLED;
+
+        self.p0.pin_cnf[pin as usize].write(|w| {
+            w
+                .dir().variant(dir_a)
+                .input().variant(input_a)
+                .pull().variant(pull_a)
+                .drive().variant(drive_a)
+                .sense().variant(sense_a)
+        });
         Ok(())
     }
 
@@ -78,7 +134,7 @@ impl idl::InOrderSysImpl for ServerImpl<'_> {
 }
 
 mod idl {
-    use super::{GpioError, Port, RccError};
+    use super::{GpioError, Mode, OutputType, Pull};
 
     include!(concat!(env!("OUT_DIR"), "/server_stub.rs"));
 }
