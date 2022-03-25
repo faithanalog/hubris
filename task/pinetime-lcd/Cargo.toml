@@ -10,6 +10,7 @@ panic-messages = ["userlib/panic-messages"]
 cortex-m = {version = "0.7", features = ["inline-asm"]}
 userlib = {path = "../../sys/userlib"}
 drv-nrf52832-gpio-api = {path = "../../drv/nrf52832-gpio-api"}
+drv-spi-api = {path = "../../drv/spi-api"}
 
 [[bin]]
 name = "task-pinetime-lcd"

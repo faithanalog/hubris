@@ -27,8 +27,9 @@ use nrf52832_pac as device;
 use userlib::*;
 
 use drv_nrf52832_spi as spi_core;
+use drv_nrf52832_gpio_api as gpio_api;
 
-task_slot!(SYS, sys);
+task_slot!(GPIO, gpio);
 
 #[derive(Copy, Clone, PartialEq)]
 enum Trace {
@@ -51,37 +52,47 @@ struct LockState {
 fn main() -> ! {
     check_server_config();
 
-    let sys = sys_api::Sys::from(SYS.get_task_id());
+    let gpio = gpio_api::Sys::from(GPIO.get_task_id());
 
     let registers = unsafe { &*CONFIG.registers };
 
     let mut spi = spi_core::Spi::from(registers);
 
+    // TODO dont hardcode this
+    // using spi mode 3 here as a hack to get pine time display working
     spi.initialize(
-        // TODO
+        device::spi0::frequency::FREQUENCY_A::M8,
+        device::spi0::config::ORDER_A::MSBFIRST,
+        device::spi0::config::CPHA_A::TRAILING,
+        device::spi0::config::CPOL_A::ACTIVELOW,
+        4,
+        3,
+        2,
     );
 
     // Configure all devices' CS pins to be deasserted (set).
     // We leave them in GPIO output mode from this point forward.
-    // TODO
     for device in CONFIG.devices {
-        sys.gpio_set_reset(device.cs.port, device.cs.pin_mask, 0)
-            .unwrap();
-        sys.gpio_configure(
-            device.cs.port,
-            device.cs.pin_mask,
-            sys_api::Mode::Output,
-            sys_api::OutputType::PushPull,
-            sys_api::Speed::Low,
-            sys_api::Pull::None,
-            sys_api::Alternate::AF1, // doesn't matter in GPIO mode
+        gpio.gpio_configure(
+            device.cs as u8,
+            gpio_api::Mode::Output,
+            gpio_api::OutputType::PushPull,
+            gpio_api::Pull::None,
         )
         .unwrap();
+        gpio.gpio_set(1 << device.cs)
+            .unwrap();
     }
+
+    let current_mux_index = 0;
+    for opt in &CONFIG.mux_options[1..] {
+        deactivate_mux_option(&opt, &gpio);
+    }
+    activate_mux_option(&CONFIG.mux_options[current_mux_index], &gpio, &spi);
 
     let mut server = ServerImpl {
         spi,
-        sys,
+        gpio,
         lock_holder: None,
         current_mux_index,
     };
@@ -93,7 +104,7 @@ fn main() -> ! {
 
 struct ServerImpl {
     spi: spi_core::Spi,
-    sys: sys_api::Sys,
+    gpio: gpio_api::Sys,
     lock_holder: Option<LockState>,
     current_mux_index: usize,
 }
@@ -171,12 +182,10 @@ impl InOrderSpiImpl for ServerImpl {
 
         // If we're asserting CS, we want to *reset* the pin. If
         // we're not, we want to *set* it. Because CS is active low.
-        let pin_mask = device.cs.pin_mask;
-        self.sys
+        self.gpio
             .gpio_set_reset(
-                device.cs.port,
-                if cs_asserted { 0 } else { pin_mask },
-                if cs_asserted { pin_mask } else { 0 },
+                if cs_asserted { 0 } else { 1 << device.cs },
+                if cs_asserted { 1 << device.cs } else { 0 },
             )
             .unwrap();
         self.lock_holder = Some(LockState {
@@ -200,8 +209,8 @@ impl InOrderSpiImpl for ServerImpl {
 
             // Deassert CS. If it wasn't asserted, this is a no-op.
             // If it was, this fixes that.
-            self.sys
-                .gpio_set_reset(device.cs.port, device.cs.pin_mask, 0)
+            self.gpio
+                .gpio_set_reset(1 << device.cs, 0)
                 .unwrap();
             self.lock_holder = None;
             Ok(())
@@ -279,8 +288,8 @@ impl ServerImpl {
         // We're doing this! Check if we need to control CS.
         let cs_override = self.lock_holder.is_some();
         if !cs_override {
-            self.sys
-                .gpio_set_reset(device.cs.port, 0, device.cs.pin_mask)
+            self.gpio
+                .gpio_set_reset(0, 1 << device.cs)
                 .unwrap();
         }
 
@@ -340,9 +349,9 @@ impl ServerImpl {
         } else {
             0
         };
-        ringbuf_entry!(Trace::Tx(byte));
-        self.spi.send8(byte);
-        bytes_written++;
+        ringbuf_entry!(Trace::Tx(txbyte));
+        self.spi.send8(txbyte);
+        bytes_written += 1;
 
         while bytes_read < transfer_size {
             if bytes_written < transfer_size {
@@ -357,19 +366,19 @@ impl ServerImpl {
                 } else {
                     0
                 };
-                ringbuf_entry!(Trace::Tx(byte));
-                self.spi.send8(byte);
-                bytes_written++;
+                ringbuf_entry!(Trace::Tx(txbyte));
+                self.spi.send8(txbyte);
+                bytes_written += 1;
             }
 
             // spinloop wheeeee
-            while !ready {
+            while !self.spi.is_read_ready() {
             }
 
             // read a byte
             let rxbyte = self.spi.recv8();
-            ringbuf_entry!(Trace::Rx(b));
-            bytes_read++;
+            ringbuf_entry!(Trace::Rx(rxbyte));
+            bytes_read += 1;
 
             // Deposit the byte if we're still within the bounds of the
             // caller's incoming lease.
@@ -383,8 +392,8 @@ impl ServerImpl {
 
         // Deassert (set) CS, if we asserted it in the first place.
         if !cs_override {
-            self.sys
-                .gpio_set_reset(device.cs.port, device.cs.pin_mask, 0)
+            self.gpio
+                .gpio_set_reset(1 << device.cs, 0)
                 .unwrap();
         }
 
@@ -392,6 +401,15 @@ impl ServerImpl {
     }
 }
 
+fn deactivate_mux_option(opt: &SpiMuxOption, gpio: &gpio_api::Sys) {
+}
+
+fn activate_mux_option(
+    opt: &SpiMuxOption,
+    gpio: &gpio_api::Sys,
+    spi: &spi_core::Spi,
+) {
+}
 
 //////////////////////////////////////////////////////////////////////////////
 // Board-peripheral-server configuration matrix
@@ -404,12 +422,10 @@ impl ServerImpl {
 /// controller.
 #[derive(Copy, Clone)]
 struct ServerConfig {
-    /// Pointer to this controller's register block. Don't let the `spi1` fool
+    /// Pointer to this controller's register block. Don't let the `spi0` fool
     /// you, they all have that type. This needs to match a peripheral in your
-    /// task's `uses` list for this to work.
-    registers: *const device::spi1::RegisterBlock,
-    /// Name for the peripheral as far as the RCC is concerned.
-    peripheral: sys_api::Peripheral,
+    /// task's `uses` list for this to work. (spitwi0, spitwi1, spi2)
+    registers: *const device::spi0::RegisterBlock,
     /// We allow for an individual SPI controller to be switched between several
     /// physical sets of pads. The mux options for a given server configuration
     /// are numbered from 0 and correspond to this slice.
@@ -422,28 +438,9 @@ struct ServerConfig {
 /// A routing of the SPI controller onto pins.
 #[derive(Copy, Clone, Debug)]
 struct SpiMuxOption {
-    /// A list of config changes to apply to activate the output pins of this
-    /// mux option. This is a list because some mux options are spread across
-    /// multiple ports, or (in at least one case) the pins in the same port
-    /// require different AF numbers to work.
-    ///
-    /// To disable the mux, we'll force these pins low. This is correct for SPI
-    /// mode 0/1 but not mode 2/3; fortunately we currently don't support mode
-    /// 2/3, so we can simplify.
-    outputs: &'static [(PinSet, sys_api::Alternate)],
-    /// A list of config changes to apply to activate the input pins of this mux
-    /// option. This is _not_ a list because there's only one such pin, CIPO.
-    ///
-    /// To disable the mux, we'll switch this pin to HiZ.
-    input: (PinSet, sys_api::Alternate),
-    /// Swap data lines?
-    swap_data: bool,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct PinSet {
-    port: sys_api::Port,
-    pin_mask: u16,
+    miso_pin: usize,
+    mosi_pin: usize,
+    sck_pin: usize
 }
 
 /// Information about one device attached to the SPI controller.
@@ -453,12 +450,10 @@ struct DeviceDescriptor {
     /// correct physical circuit. This gives the index of the right choice in
     /// the server's configured `SpiMuxOption` array.
     mux_index: usize,
-    /// Where the CS pin is. While this is a `PinSet`, it should only have one
-    /// pin in it, and we check this at startup.
-    cs: PinSet,
-    /// Clock divider to apply while speaking with this device. Yes, this says
-    /// spi1 no matter which SPI block we're in charge of.
-    clock_divider: device::spi1::cfg1::MBR_A,
+    /// Number of the pin to use for chip select (0-31)
+    cs: usize,
+    /// SPI transmit frequency
+    frequency: device::spi0::frequency::FREQUENCY_A,
 }
 
 /// Any impl of ServerConfig for Server has to pass these tests at startup.
@@ -474,35 +469,21 @@ fn check_server_config() {
     // Mux options must be provided.
     assert!(!CONFIG.mux_options.is_empty());
     for muxopt in CONFIG.mux_options {
-        // Each mux option must contain at least one output config record.
-        assert!(!muxopt.outputs.is_empty());
-        let mut total_pins = 0;
-        for (pinset, _af) in muxopt.outputs {
-            // Each config must apply to at least one pin.
-            assert!(pinset.pin_mask != 0);
-            // If this is the same port as the input pin, it must not _include_
-            // the input pin.
-            if pinset.port == muxopt.input.0.port {
-                assert!(pinset.pin_mask & muxopt.input.0.pin_mask == 0);
-            }
-            // We're counting how many total pins are controlled here.
-            total_pins += pinset.pin_mask.count_ones();
-        }
-        // There should be two affected output pins (COPI, SCK). This check
-        // prevents people from being clever and trying to mux SPI to two
-        // locations simultaneously, which Does Not Work. It also catches
-        // mistakenly including CIPO in the outputs set.
-        assert!(total_pins == 2);
-        // There should be exactly one pin in the input set.
-        assert!(muxopt.input.0.pin_mask.count_ones() == 1);
+        // Make sure miso/mosi/sck pins are unique
+        assert!(muxopt.miso_pin != muxopt.mosi_pin);
+        assert!(muxopt.miso_pin != muxopt.sck_pin);
+        assert!(muxopt.mosi_pin != muxopt.sck_pin);
     }
     // At least one device must be defined.
     assert!(!CONFIG.devices.is_empty());
     for dev in CONFIG.devices {
         // Mux index must be valid.
         assert!(dev.mux_index < CONFIG.mux_options.len());
-        // CS pin must designate _exactly one_ pin in its mask.
-        assert!(dev.cs.pin_mask.is_power_of_two());
+        let muxopt = CONFIG.mux_options[dev.mux_index];
+        // Make sure CS pin is unique from mux pins
+        assert!(dev.cs != muxopt.miso_pin);
+        assert!(dev.cs != muxopt.mosi_pin);
+        assert!(dev.cs != muxopt.sck_pin);
     }
 }
 

@@ -97,9 +97,8 @@ impl From<&'static device::spi0::RegisterBlock> for Spi {
 
 impl Spi {
 
-    // We take miso/mosi/sck as u32 instead of the respective WHATEVER_A
-    // types because the WHATEVER_A enums only have the disconnected
-    // value in them.
+    // arty TODO freq/order/cpha/cpol should probably be per-device not
+    // per-mux but idk
     pub fn initialize(
         &mut self,
         frequency: device::spi0::frequency::FREQUENCY_A,
@@ -111,8 +110,6 @@ impl Spi {
         sck_pin: u32
     ) {
         // Expected preconditions:
-        // - GPIOs configured to proper AF etc - we cannot do this, because we
-        // cannot presume to have either direct GPIO access _or_ IPC access.
         // - Other peripherals sharing the SPI device's address space have
         // been turned off if they were previously in use. There is a finite
         // set of other peripherals that share the address space so technically
@@ -126,8 +123,8 @@ impl Spi {
 
         // We need to initialize the whole register block
         // we clear events register in case there's stuff left over
+        self.reg.enable.write(|w| w.enable().disabled());
         self.reg.intenclr.write(|w| w.ready().clear());
-        self.reg.enable.write(|w| w.enable().enabled());
 
         // bits() calls are unsafe, but that's how you put the data in.
         self.reg.psel.miso.write(|w| unsafe { w.pselmiso().bits(miso_pin) });
@@ -143,6 +140,8 @@ impl Spi {
                 .cpha().variant(cpha)
                 .cpol().variant(cpol)
         });
+
+        self.reg.enable.write(|w| w.enable().enabled());
     }
 
     pub fn enable(&mut self) {

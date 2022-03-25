@@ -70,12 +70,12 @@ struct SpiMuxOptionConfig {
 #[derive(Clone, Debug, Deserialize)]
 struct DeviceDescriptorConfig {
     mux: String,
-    frequency: Frequency,
+    frequency: FrequencyConfig,
     cs: usize,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
-enum Frequency {
+enum FrequencyConfig {
     K125,
     K250,
     K500,
@@ -162,7 +162,6 @@ impl ToTokens for SpiConfig {
         tokens.append_all(quote::quote! {
             const CONFIG: ServerConfig = ServerConfig {
                 registers: device::#devname::ptr(),
-                peripheral: sys_api::Peripheral::#pname,
                 mux_options: &[ #(#muxes),* ],
                 devices: &[ #(#device_code),* ],
             };

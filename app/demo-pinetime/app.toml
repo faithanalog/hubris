@@ -64,19 +64,19 @@ uses = ["gpio"]
 #interrupts = {"usart2.irq" = 1}
 #task-slots = ["rcc_driver"]
 
-#[tasks.spi_driver]
-#path = "../../drv/nrf52832-spi-server"
-#name = "drv-nrf52832-spi-server"
-#priority = 2
-#requires = {flash = 16384, ram = 2048}
-#features = ["spi0"]
-#uses = ["spi0"]
-#start = true
-#stacksize = 880
-#task-slots = ["sys"]
+[tasks.spi]
+path = "../../drv/nrf52832-spi-server"
+name = "drv-nrf52832-spi-server"
+priority = 2
+requires = {flash = 16384, ram = 2048}
+features = ["spi0"]
+uses = ["spitwi0"]
+start = true
+stacksize = 880
+task-slots = ["gpio"]
 
-#[tasks.spi_driver.config.spi]
-#global_config = "spi0"
+[tasks.spi.config.spi]
+global_config = "spi0"
 
 #[tasks.usart_driver]
 #path = "../../drv/nRF52832-usart"
@@ -112,9 +112,9 @@ uses = ["gpio"]
 path = "../../task/pinetime-lcd"
 name = "task-pinetime-lcd"
 priority = 3
-requires = {flash = 8192, ram = 1024}
+requires = {flash = 4096, ram = 1024}
 start = true
-task-slots = ["gpio"]
+task-slots = ["gpio", "spi"]
 
 [tasks.hiffy]
 path = "../../task/hiffy"
