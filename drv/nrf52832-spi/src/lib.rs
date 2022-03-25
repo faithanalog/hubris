@@ -105,9 +105,9 @@ impl Spi {
         order: device::spi0::config::ORDER_A,
         cpha: device::spi0::config::CPHA_A,
         cpol: device::spi0::config::CPOL_A,
-        miso_pin: u32,
-        mosi_pin: u32,
-        sck_pin: u32
+        miso_pin: u8,
+        mosi_pin: u8,
+        sck_pin: u8
     ) {
         // Expected preconditions:
         // - Other peripherals sharing the SPI device's address space have
@@ -127,9 +127,9 @@ impl Spi {
         self.reg.intenclr.write(|w| w.ready().clear());
 
         // bits() calls are unsafe, but that's how you put the data in.
-        self.reg.psel.miso.write(|w| unsafe { w.pselmiso().bits(miso_pin) });
-        self.reg.psel.mosi.write(|w| unsafe { w.pselmosi().bits(mosi_pin) });
-        self.reg.psel.sck.write(|w| unsafe { w.pselsck().bits(sck_pin) });
+        self.reg.psel.miso.write(|w| unsafe { w.pselmiso().bits(miso_pin as u32) });
+        self.reg.psel.mosi.write(|w| unsafe { w.pselmosi().bits(mosi_pin as u32) });
+        self.reg.psel.sck.write(|w| unsafe { w.pselsck().bits(sck_pin as u32) });
 
         self.reg.frequency.write(|w| w.frequency().variant(frequency));
 
@@ -151,6 +151,8 @@ impl Spi {
     pub fn start(&mut self) {
         // Read a byte just to clear the read event in case its set
         let _ = self.recv8();
+        self.reg.events_ready.write(|w| unsafe { w.bits(0) });
+        //assert!(!self.is_read_ready());
     }
 
     pub fn is_read_ready(&self) -> bool {
@@ -176,7 +178,9 @@ impl Spi {
     /// - There must be at least one byte of data in the receive register
     ///   (check is_read_ready). Otherwise you'll just get some undefined data
     pub fn recv8(&mut self) -> u8 {
-        self.reg.rxd.read().rxd().bits()
+        let b = self.reg.rxd.read().rxd().bits();
+        self.reg.events_ready.write(|w| unsafe { w.bits(0) });
+        b
     }
 
     pub fn end(&mut self) {

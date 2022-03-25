@@ -7,10 +7,12 @@
 
 use userlib::*;
 use drv_nrf52832_gpio_api as gpio_api;
-use drv_spi_api as spi_api;
+//use drv_spi_api as spi_api;
+use drv_nrf52832_spi as spi_core;
+use nrf52832_pac as device;
 
 task_slot!(GPIO, gpio);
-task_slot!(SPI, spi);
+//task_slot!(SPI, spi);
 
 
 const CMD_NOP: u8 =       0x00; // NOP
@@ -114,7 +116,6 @@ pub fn main() -> ! {
     let mut response: u32 = 0;
 
     let gpio = gpio_api::Sys::from(GPIO.get_task_id());
-    let spi = spi_api::Spi::from(SPI.get_task_id());
 
     gpio.gpio_configure_output(BACKLIGHT_LOW, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(BACKLIGHT_MED, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
@@ -126,10 +127,22 @@ pub fn main() -> ! {
     gpio.gpio_configure_output(LCD_RESET, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(LCD_COMMAND, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
 
+    let registers = unsafe { &*device::SPI0::ptr() };
+    let mut spi = spi_core::Spi::from(registers);
+    spi.initialize(
+        device::spi0::frequency::FREQUENCY_A::M8,
+        device::spi0::config::ORDER_A::MSBFIRST,
+        device::spi0::config::CPHA_A::TRAILING,
+        device::spi0::config::CPOL_A::ACTIVELOW,
+        MISO,
+        MOSI,
+        SCK,
+    );
+
 
     gpio.gpio_set_reset(
-        (1 << BACKLIGHT_LOW) | (1 << BACKLIGHT_MED) | (1 << CHIP_SELECT) | (1 << LCD_COMMAND) | (1 << LCD_RESET),
-        1 << BACKLIGHT_HIGH,
+        (1 << BACKLIGHT_LOW) | (1 << BACKLIGHT_MED) | (1 << LCD_COMMAND) | (1 << LCD_RESET),
+        (1 << BACKLIGHT_HIGH) | (1 << CHIP_SELECT),
     );
 
 
@@ -142,7 +155,7 @@ pub fn main() -> ! {
     // in there or deal with moving the original ones in.
     let mut lcd = Lcd {
         spidev: 0,
-        spi: spi_api::Spi::from(SPI.get_task_id()),
+        spi,
         gpio: gpio_api::Sys::from(GPIO.get_task_id())
     };
 
@@ -160,13 +173,15 @@ pub fn main() -> ! {
     dl += INTERVAL;
     lcd.send_command(CMD_SLPOUT);
 
-    lcd.send_command(CMD_NORON);
-    lcd.send_command(CMD_INVON);
 
     lcd.set_pixel_format(PixelFormat::RGB565);
     lcd.put_color_rect(20, 20, 64, 64, 0xFFFF);
     lcd.put_color_rect(140, 20, 64, 64, 0xFFFF);
     lcd.put_color_rect(40, 160, 140, 20, 0x0F0F);
+
+    lcd.send_command(CMD_DISPON);
+    lcd.send_command(CMD_NORON);
+    lcd.send_command(CMD_INVON);
 
     sys_set_timer(Some(dl), TIMER_NOTIFICATION);
     loop {
@@ -183,20 +198,31 @@ pub fn main() -> ! {
 
 struct Lcd {
     spidev: u8,
-    spi: spi_api::Spi,
+    spi: spi_core::Spi,
     gpio: gpio_api::Sys,
 }
 
 // TODO make these things return errors instead of just unwrap
 impl Lcd {
+    fn spi_write(&mut self, data: &[u8]) {
+        self.spi.start();
+        for byte in data {
+            self.spi.send8(*byte);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+        }
+    }
+
     fn send_command(&mut self, command: u8) {
         self.gpio.gpio_reset(1 << LCD_COMMAND).unwrap();
-        self.spi.write(self.spidev, &[command]).unwrap();
+        //self.spi.write(self.spidev, &[command]).unwrap();
+        self.spi_write(&[command]);
     }
 
     fn send_data(&mut self, data: &[u8]) {
         self.gpio.gpio_set(1 << LCD_COMMAND).unwrap();
-        self.spi.write(self.spidev, &data).unwrap();
+        //self.spi.write(self.spidev, &data).unwrap();
+        self.spi_write(&data);
     }
 
     fn send_data8(&mut self, data: u8) {
@@ -267,5 +293,6 @@ impl Lcd {
 // I'm not supporting RGB888 because this display is 16-bit and so its useless
 pub enum PixelFormat {
     RGB444 = 0b0101_0011,
-    RGB565 = 0b0101_0101,
+    //RGB565 = 0b0101_0101,
+    RGB565 = 0x65,
 }
