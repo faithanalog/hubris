@@ -64,7 +64,7 @@ struct SpiConfig {
 struct SpiMuxOptionConfig {
     miso_pin: usize,
     mosi_pin: usize,
-    sck_pin: usize
+    sck_pin: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -72,6 +72,7 @@ struct DeviceDescriptorConfig {
     mux: String,
     frequency: FrequencyConfig,
     cs: usize,
+    spi_mode: usize, 
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
@@ -148,11 +149,13 @@ impl ToTokens for SpiConfig {
             let cs = dev.cs;
             let freq: syn::Ident =
                 syn::parse_str(&format!("{:?}", dev.frequency)).unwrap();
+            let spi_mode = dev.spi_mode;
             quote::quote! {
                 DeviceDescriptor {
                     mux_index: #mux_index,
                     cs: #cs,
                     frequency: device::spi0::frequency::FREQUENCY_A::#freq,
+                    spi_mode: #spi_mode,
                 }
             }
         });
@@ -224,6 +227,13 @@ fn check_spi_config(
             .into());
         }
         check_gpiopin(dev.cs)?;
+        if dev.spi_mode > 3 {
+            return Err(format!(
+                "{} is not a valid spi mode. valid spi modes are 0-3. see https://en.wikipedia.org/wiki/Serial_Peripheral_Interface#Mode_numbers for more information",
+                dev.spi_mode
+            )
+            .into());
+        }
     }
 
     Ok(())

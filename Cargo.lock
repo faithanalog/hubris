@@ -2826,8 +2826,7 @@ version = "0.1.0"
 dependencies = [
  "cortex-m",
  "drv-nrf52832-gpio-api",
- "drv-nrf52832-spi",
- "nrf52832-pac",
+ "drv-spi-api",
  "userlib",
 ]
 

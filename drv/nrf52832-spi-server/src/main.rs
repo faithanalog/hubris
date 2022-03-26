@@ -57,18 +57,7 @@ fn main() -> ! {
     let registers = unsafe { &*CONFIG.registers };
 
     let mut spi = spi_core::Spi::from(registers);
-
-    // TODO dont hardcode this
-    // using spi mode 3 here as a hack to get pine time display working
-    spi.initialize(
-        device::spi0::frequency::FREQUENCY_A::M8,
-        device::spi0::config::ORDER_A::MSBFIRST,
-        device::spi0::config::CPHA_A::TRAILING,
-        device::spi0::config::CPOL_A::ACTIVELOW,
-        4,
-        3,
-        2,
-    );
+    spi.initialize();
 
     // Configure all devices' CS pins to be deasserted (set).
     // We leave them in GPIO output mode from this point forward.
@@ -84,17 +73,39 @@ fn main() -> ! {
             .unwrap();
     }
 
-    let current_mux_index = 0;
-    for opt in &CONFIG.mux_options[1..] {
-        deactivate_mux_option(&opt, &gpio);
+    for opt in CONFIG.mux_options {
+        // Configure the muxes' GPIO states so we don't have to later.
+        gpio.gpio_configure(
+            opt.miso_pin as u8,
+            gpio_api::Mode::Input,
+            gpio_api::OutputType::PushPull,
+            gpio_api::Pull::None,
+        )
+        .unwrap();
+        gpio.gpio_configure(
+            opt.mosi_pin as u8,
+            gpio_api::Mode::Output,
+            gpio_api::OutputType::PushPull,
+            gpio_api::Pull::None,
+        )
+        .unwrap();
+        gpio.gpio_configure(
+            opt.sck_pin as u8,
+            gpio_api::Mode::Output,
+            gpio_api::OutputType::PushPull,
+            gpio_api::Pull::None,
+        )
+        .unwrap();
     }
-    activate_mux_option(&CONFIG.mux_options[current_mux_index], &gpio, &spi);
+
+    let last_device_active = 0;
+    activate_spi_for_device(last_device_active, &gpio, &mut spi);
 
     let mut server = ServerImpl {
         spi,
         gpio,
         lock_holder: None,
-        current_mux_index,
+        last_device_active,
     };
     let mut incoming = [0u8; INCOMING_SIZE];
     loop {
@@ -106,7 +117,7 @@ struct ServerImpl {
     spi: spi_core::Spi,
     gpio: gpio_api::Sys,
     lock_holder: Option<LockState>,
-    current_mux_index: usize,
+    last_device_active: usize,
 }
 
 impl InOrderSpiImpl for ServerImpl {
@@ -179,6 +190,11 @@ impl InOrderSpiImpl for ServerImpl {
 
         // Reject out-of-range devices.
         let device = CONFIG.devices.get(devidx).ok_or(SpiError::BadDevice)?;
+
+        // Configure the spi peripheral for the device's mux/transmission
+        // settings
+        activate_spi_for_device(devidx, &self.gpio, &mut self.spi);
+        self.last_device_active = devidx;
 
         // If we're asserting CS, we want to *reset* the pin. If
         // we're not, we want to *set* it. Because CS is active low.
@@ -270,12 +286,15 @@ impl ServerImpl {
 
         // We have a reasonable-looking request containing reasonable-looking
         // lease(s). This is our commit point.
-        // arty - what does this mean
         ringbuf_entry!(Trace::Start(op, (src_len, dest_len)));
 
-        // Vestigial from stm impl. these don't actually do anything but when
-        // we switch to DMA maybe they will.
-        self.spi.enable();
+        // Reconfigure SPI peripheral if necessary
+        if device_index != self.last_device_active {
+            self.last_device_active = device_index;
+            activate_spi_for_device(device_index, &self.gpio, &mut self.spi);
+        }
+
+        // start the transmission
         self.spi.start();
 
         const BUFSIZ: usize = 16;
@@ -293,15 +312,12 @@ impl ServerImpl {
                 .unwrap();
         }
 
-
-
-
-        // Reading lags writing by one byte due to double buffering
+        // nRF SPI is double buffered
         //
         // If the transaction is just one byte, we need to
         // - write 1 byte
         // - wait for ready event
-        // - read the real byte.
+        // - read 1 byte.
         //
         // If the transaction is two or more bytes we need to
         // - write 2 bytes
@@ -401,15 +417,48 @@ impl ServerImpl {
     }
 }
 
-fn deactivate_mux_option(opt: &SpiMuxOption, gpio: &gpio_api::Sys) {
+/// reconfigure the underlying spi peripheral to talk to `dev`. 
+/// this doesn't touch chip select because some peripherals need chip select to be unasserted to
+/// actually do anything with the data that came in. chip select makes sense to manage separately.
+fn activate_spi_for_device(
+    dev: usize,
+    gpio: &gpio_api::Sys,
+    spi: &mut spi_core::Spi,
+) {
+    spi.disable();
+
+    let dev_params = CONFIG.devices[dev];
+    let mux_params = CONFIG.mux_options[dev_params.mux_index];
+
+    let cpha = if dev_params.spi_mode == 0 || dev_params.spi_mode == 2 {
+        device::spi0::config::CPHA_A::LEADING
+    } else {
+        device::spi0::config::CPHA_A::TRAILING
+    };
+
+    // Configure the GPIO output in accordance with what nRF wants us to use
+    let cpol = if dev_params.spi_mode == 0 || dev_params.spi_mode == 1 {
+        gpio.gpio_reset(1 << mux_params.sck_pin).unwrap();
+        device::spi0::config::CPOL_A::ACTIVEHIGH
+    } else {
+        gpio.gpio_set(1 << mux_params.sck_pin).unwrap();
+        device::spi0::config::CPOL_A::ACTIVELOW
+    };
+
+    spi.configure_transmission_parameters(
+        dev_params.frequency,
+        device::spi0::config::ORDER_A::MSBFIRST,
+        cpha,
+        cpol,
+    );
+
+    spi.enable(
+        mux_params.miso_pin as u8,
+        mux_params.mosi_pin as u8,
+        mux_params.sck_pin as u8,
+    );
 }
 
-fn activate_mux_option(
-    opt: &SpiMuxOption,
-    gpio: &gpio_api::Sys,
-    spi: &spi_core::Spi,
-) {
-}
 
 //////////////////////////////////////////////////////////////////////////////
 // Board-peripheral-server configuration matrix
@@ -440,7 +489,7 @@ struct ServerConfig {
 struct SpiMuxOption {
     miso_pin: usize,
     mosi_pin: usize,
-    sck_pin: usize
+    sck_pin: usize,
 }
 
 /// Information about one device attached to the SPI controller.
@@ -454,6 +503,8 @@ struct DeviceDescriptor {
     cs: usize,
     /// SPI transmit frequency
     frequency: device::spi0::frequency::FREQUENCY_A,
+    /// SPI mode, describing clock phase/polarity
+    spi_mode: usize,
 }
 
 /// Any impl of ServerConfig for Server has to pass these tests at startup.
