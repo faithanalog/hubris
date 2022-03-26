@@ -205,12 +205,18 @@ struct Lcd {
 // TODO make these things return errors instead of just unwrap
 impl Lcd {
     fn spi_write(&mut self, data: &[u8]) {
+        if data.len() == 0 {
+            return;
+        }
         self.spi.start();
-        for byte in data {
+        self.spi.send8(data[0]);
+        for byte in &data[1..] {
             self.spi.send8(*byte);
             while !self.spi.is_read_ready() {}
             let _ = self.spi.recv8();
         }
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
     }
 
     fn send_command(&mut self, command: u8) {
@@ -269,8 +275,8 @@ impl Lcd {
         // There's got to be a better way to do this
         // TODO 12 bit support
         for i in 0..(TRANSFER_BLOCK / 2) {
-            pix_data[i] = repr[0];
-            pix_data[i+1] = repr[1];
+            pix_data[i * 2] = repr[0];
+            pix_data[i * 2 + 1] = repr[1];
         }
 
         // TODO 12 bit support
