@@ -112,9 +112,10 @@ global_config = "spi0"
 path = "../../task/pinetime-lcd"
 name = "task-pinetime-lcd"
 priority = 3
-requires = {flash = 4096, ram = 1024}
+requires = {flash = 4096, ram = 2048}
 start = true
 task-slots = ["gpio", "spi"]
+stacksize = 1536
 
 [tasks.hiffy]
 path = "../../task/hiffy"

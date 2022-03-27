@@ -10,6 +10,7 @@ use drv_nrf52832_gpio_api as gpio_api;
 use drv_spi_api as spi_api;
 //use drv_nrf52832_spi as spi_core;
 //use nrf52832_pac as device;
+use micromath::F32Ext;
 
 task_slot!(GPIO, gpio);
 task_slot!(SPI, spi);
@@ -130,7 +131,7 @@ pub fn main() -> ! {
     gpio.gpio_set_reset(
         (1 << BACKLIGHT_LOW) | (1 << BACKLIGHT_MED) | (1 << LCD_COMMAND) | (1 << LCD_RESET),
         (1 << BACKLIGHT_HIGH) | (1 << CHIP_SELECT),
-    );
+    ).unwrap();
 
 
     let mut current = 0;
@@ -162,25 +163,43 @@ pub fn main() -> ! {
 
 
     lcd.set_pixel_format(PixelFormat::RGB565);
-    lcd.put_color_rect(0, 0, 240, 240, 0x0202);
-    lcd.put_color_rect(20, 20, 64, 64, 0xFFFF);
-    lcd.put_color_rect(140, 20, 64, 64, 0xFFFF);
-    lcd.put_color_rect(40, 160, 140, 20, 0x0F0F);
+    lcd.draw_color_rect(0, 0, 240, 320, 0x0808);
+    for row in 0..320 {
+        lcd.draw_twister_line(row, row as f32 * 0.5, row as f32);
+    }
+    //lcd.draw_color_rect(20, 20, 64, 64, 0xFFFF);
+    //lcd.draw_color_rect(140, 20, 64, 64, 0xFFFF);
+    //lcd.draw_color_rect(40, 160, 140, 20, 0x0F0F);
 
     lcd.send_command(CMD_DISPON);
     lcd.send_command(CMD_NORON);
     lcd.send_command(CMD_INVON);
+    lcd.set_scroll_area(0, 320, 0);
+    lcd.set_scroll_start(0);
 
-    sys_set_timer(Some(dl), TIMER_NOTIFICATION);
+    //sys_set_timer(Some(dl), TIMER_NOTIFICATION);
+    let mut time = 0.0;
+    let mut y = 160.0;
+    let mut scroll = 1;
     loop {
-        let msginfo = sys_recv_open(&mut msg, TIMER_NOTIFICATION);
-        
-        gpio.gpio_toggle(1 << BACKLIGHT_HIGH);
+        //lcd.draw_twister(time);
 
-        if msginfo.sender == TaskId::KERNEL {
-            dl += INTERVAL;
-            sys_set_timer(Some(dl), TIMER_NOTIFICATION);
-        }
+        //time += 1.0;
+        //scroll = (scroll + 1) % 320;
+        //y += 0.5;
+        //lcd.draw_twister_line((scroll + 240) % 320, y, time);
+        //lcd.set_scroll_start(scroll);
+        lcd.draw_color_rect(0, 0, 240, 240, 0x8080);
+        lcd.draw_color_rect(0, 0, 240, 240, 0x0808);
+
+        //let msginfo = sys_recv_open(&mut msg, TIMER_NOTIFICATION);
+        
+        //gpio.gpio_toggle(1 << BACKLIGHT_HIGH);
+
+        //if msginfo.sender == TaskId::KERNEL {
+            //dl += 20;
+            //sys_set_timer(Some(dl), TIMER_NOTIFICATION);
+        //}
     }
 }
 
@@ -216,17 +235,19 @@ impl Lcd {
         self.send_data(&data.to_be_bytes());
     }
 
-    fn set_window(&mut self, x: u8, y: u8, w: u8, h: u8) {
+    fn set_window(&mut self, x: u8, y: u16, w: u8, h: u16) {
         self.send_command(CMD_CASET);
         self.send_data(&[
             0, x,
             0, (x + w - 1)
         ]);
 
+        let top = y.to_be_bytes();
+        let bot = (y + h - 1).to_be_bytes();
         self.send_command(CMD_RASET);
         self.send_data(&[
-            0, y,
-            0, (y + h - 1)
+            top[0], top[1],
+            bot[0], bot[1]
         ]);
     }
 
@@ -236,27 +257,47 @@ impl Lcd {
         self.send_data(&[lcd_pix_fmt]);
     }
 
-    /// Fill a rectangle with `color`. If display is in 12-bit mode, the
-    /// low 12 bits of `color` will be used.
-    fn put_color_rect(&mut self, x: u8, y: u8, w: u8, h: u8, color: u16) {
+    /// Set the height of the top fixed area, scroll area, and bottom fixed area. The three values
+    /// must sum to 320 or results are undefined.
+    fn set_scroll_area(&mut self, top_fixed_height: u16, scroll_height: u16, bottom_fixed_height: u16) {
+        let tfa = top_fixed_height.to_be_bytes();
+        let vsa = scroll_height.to_be_bytes();
+        let bfa = bottom_fixed_height.to_be_bytes();
+        self.send_command(CMD_VSCRDEF);
+        self.send_data(&[
+            tfa[0], tfa[1],
+            vsa[0], vsa[1],
+            bfa[0], bfa[1]
+        ]);
+    }
 
-        // TODO 12 bit support
+    /// set VSCSAD register. When scanning out the scrolled area, the display starts at this
+    /// row as the top row and then goes down from there. So steadily incrementing this number
+    /// creates the effect of scrolling up, while decrementing scrolls down.
+    ///
+    /// The display controller has 320 rows of memory even though the display is only 240x240 so
+    /// you can take advantage of this to draw stuff off-screen before scrolling it on screen.
+    fn set_scroll_start(&mut self, row: u16) {
+        self.send_command(CMD_VSCSAD);
+        self.send_data(&row.to_be_bytes());
+    }
+
+    /// Fill a rectangle with `color`. No 12 bit support.
+    fn draw_color_rect(&mut self, x: u8, y: u16, w: u8, h: u16, color: u16) {
+
         self.set_window(x, y, w, h);
         self.send_command(CMD_RAMWR);
         
-        // Transfer in up to 96-byte chunks (64 pixels in 12 bit, 48 in 16 bit)
-        const TRANSFER_BLOCK: usize = 96;
+        // Transfer in up to 256-byte chunks (128 pixels)
+        const TRANSFER_BLOCK: usize = 256;
         let mut pix_data = [0; TRANSFER_BLOCK];
         let repr = color.to_be_bytes();
 
-        // There's got to be a better way to do this
-        // TODO 12 bit support
-        for i in 0..(TRANSFER_BLOCK / 2) {
-            pix_data[i * 2] = repr[0];
-            pix_data[i * 2 + 1] = repr[1];
+        for i in (0..TRANSFER_BLOCK).step_by(2) {
+            pix_data[i] = repr[0];
+            pix_data[i + 1] = repr[1];
         }
 
-        // TODO 12 bit support
         let mut bytes_remaining = (w as usize) * (h as usize) * 2;
 
         while bytes_remaining > TRANSFER_BLOCK {
@@ -267,8 +308,70 @@ impl Lcd {
         self.send_data(&pix_data[0 .. bytes_remaining]);
     }
 
+    fn scroll_twister(&mut self, t: f32) {
+
+    }
+
+
+    fn draw_twister_line(&mut self, row: u16, y: f32, t: f32) {
+        const PI: f32 = 3.141592653589;
+        const FRAC_PI_2: f32 = PI * 0.5;
+
+
+        // Only render to the center 120 pixels
+        let mut pix_data = [0x08; 240];
+
+        let a = (PI * (y / 2000.0 + t / 300.0)).cos() * PI;
+        //let a = (PI * (y / 300.0)).cos() * PI;
+        //let a = (y + t) / 40.0;
+        let deg90 = FRAC_PI_2;
+        let deg180 = PI;
+        let deg270 = deg90 + deg180;
+
+        //let xoff = (y / 20.0).sin() * 0.25 + (y / 10.0).cos() * 0.15;
+        //let xoff = y / 100.0;
+        //let xoff = (((t / 80.0) - y + 20.0 * ((t / 20000.0 + a / (120.0 + 20.0 + ((t / 100.0 + y / 500.0) * PI).sin())) * PI).sin()) * PI).cos() * 16.0 / 30.0;
+        let xoff= 0.0;
+
+        let x0 = a.sin() + xoff;
+        let x1 = (a + deg90).sin() + xoff;
+        let x2 = (a + deg180).sin() + xoff;
+        let x3 = (a + deg270).sin() + xoff;
+
+        let pairs = [
+            TwisterPair{l: x0, r: x1, col: 0xF810_u16.to_be_bytes()},
+            TwisterPair{l: x1, r: x2, col: 0x07E0_u16.to_be_bytes()},
+            TwisterPair{l: x2, r: x3, col: 0x061F_u16.to_be_bytes()},
+            TwisterPair{l: x3, r: x0, col: 0xFE00_u16.to_be_bytes()},
+        ];
+
+        for pair in pairs {
+            if pair.r > pair.l {
+                let l = (((pair.l + 1.0) * 30.0 + 30.0) as usize) * 2;
+                let r = (((pair.r + 1.0) * 30.0 + 30.0) as usize) * 2;
+                for i in 0..8 {
+                    pix_data[l + i - 4] = 0;
+                    pix_data[r + i - 4] = 0;
+                }
+                for i in ((l + 4)..(r - 4)).step_by(2) {
+                    pix_data[i] = pair.col[0];
+                    pix_data[i + 1] = pair.col[1];
+                }
+            }
+        }
+
+        self.set_window(60, row, 120, 1);
+        self.send_command(CMD_RAMWR);
+        self.send_data(&pix_data);
+    }
+
 
     
+}
+struct TwisterPair {
+    l: f32,
+    r: f32,
+    col: [u8; 2]
 }
 
 #[repr(u8)]

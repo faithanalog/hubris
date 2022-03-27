@@ -171,6 +171,7 @@ impl Spi {
 
     /// Start a transaction. This just clears out the read buffer and the ready
     /// flag.
+    #[inline(always)]
     pub fn start(&mut self) {
         // Read a byte just to clear the read event in case its set
         let _ = self.recv8();
@@ -179,6 +180,7 @@ impl Spi {
     /// Checks if the ready flag is set. The ready flag is set whenever the SPI
     /// peripheral provides a new byte in the RXD read-register, and remains set
     /// until we clear it. recv8 clears this.
+    #[inline(always)]
     pub fn is_read_ready(&self) -> bool {
         self.reg.events_ready.read().bits() != 0
     }
@@ -189,6 +191,7 @@ impl Spi {
     /// start of a transaction to keep stuff moving along smoothly. After that,
     /// wait for `is_read_ready()`, then call `recv8()` before sending another
     /// byte.
+    #[inline(always)]
     pub fn send8(&mut self, byte: u8) {
         // There's no "safe" way to put data into txd. thanks pac crate.
         self.reg.txd.write(|w| unsafe { w.txd().bits(byte) });
@@ -201,6 +204,7 @@ impl Spi {
     ///
     /// - There must be at least one byte of data in the receive register
     ///   (check `is_read_ready()`). Otherwise you'll just get some undefined data
+    #[inline(always)]
     pub fn recv8(&mut self) -> u8 {
         // the spec sheet is not terribly clear on whether you have to
         // manually zero the events_ready register. I (artemis) experimented

@@ -112,7 +112,6 @@ impl Sys {
     }
 
     /// Sets some pins based on `flag` -- high if `true`, low if `false`.
-    #[inline]
     pub fn gpio_set_to(
         &self,
         pinset: u32,

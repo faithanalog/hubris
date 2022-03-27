@@ -297,7 +297,7 @@ impl ServerImpl {
         // start the transmission
         self.spi.start();
 
-        const BUFSIZ: usize = 16;
+        const BUFSIZ: usize = 128;
 
         let mut tx: Option<LeaseBufReader<_, BUFSIZ>> =
             data_src.map(|b| LeaseBufReader::from(b.into_inner()));
@@ -365,7 +365,6 @@ impl ServerImpl {
         } else {
             0
         };
-        ringbuf_entry!(Trace::Tx(txbyte));
         self.spi.send8(txbyte);
         bytes_written += 1;
 
@@ -382,7 +381,6 @@ impl ServerImpl {
                 } else {
                     0
                 };
-                ringbuf_entry!(Trace::Tx(txbyte));
                 self.spi.send8(txbyte);
                 bytes_written += 1;
             }
@@ -393,7 +391,6 @@ impl ServerImpl {
 
             // read a byte
             let rxbyte = self.spi.recv8();
-            ringbuf_entry!(Trace::Rx(rxbyte));
             bytes_read += 1;
 
             // Deposit the byte if we're still within the bounds of the
@@ -420,6 +417,11 @@ impl ServerImpl {
 /// reconfigure the underlying spi peripheral to talk to `dev`. 
 /// this doesn't touch chip select because some peripherals need chip select to be unasserted to
 /// actually do anything with the data that came in. chip select makes sense to manage separately.
+///
+/// It's possible that mux config and device transmission config could be split up and managed
+/// independently. The spec sheet isn't entirely clear on that and I don't feel like playing around
+/// with it to find out. I think the overhead is low enough that it's not a huge concern, unless
+/// you're interleaving a lot of small transactions for two devices on the same spi peripheral.
 fn activate_spi_for_device(
     dev: usize,
     gpio: &gpio_api::Sys,
