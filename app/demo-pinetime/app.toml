@@ -43,18 +43,18 @@ requires = {flash = 1024, ram = 1024}
 start = true
 uses = ["gpio"]
 
-[tasks.spi]
-path = "../../drv/nrf52832-spi-server"
-name = "drv-nrf52832-spi-server"
-priority = 2
-requires = {flash = 16384, ram = 2048}
+#[tasks.spi]
+#path = "../../drv/nrf52832-spi-server"
+#name = "drv-nrf52832-spi-server"
+#priority = 2
+#requires = {flash = 16384, ram = 2048}
 #uses = ["spitwi0"]
-start = true
-stacksize = 880
-task-slots = ["gpio"]
-
-[tasks.spi.config.spi]
-global_config = "spi0"
+#start = true
+#stacksize = 880
+#task-slots = ["gpio"]
+#
+#[tasks.spi.config.spi]
+#global_config = "spi0"
 
 [tasks.lcd]
 path = "../../task/pinetime-lcd"
