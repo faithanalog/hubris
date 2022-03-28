@@ -2,16 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Server task for the STM32H7 SPI peripheral.
-//!
-//! Currently this hardcodes the clock rate.
+//! Server task for the nRF52832 SPI peripheral.
 //!
 //! See the `spi-api` crate for the protocol being implemented here.
-//!
-//! # Why is everything `spi1`
-//!
-//! As noted in the `stm32h7-spi` driver, the `stm32h7` PAC has decided that all
-//! SPI types should be called `spi1`.
 
 #![no_std]
 #![no_main]
@@ -31,12 +24,10 @@ use drv_nrf52832_gpio_api as gpio_api;
 
 task_slot!(GPIO, gpio);
 
+// Most of these aren't currently in use
 #[derive(Copy, Clone, PartialEq)]
 enum Trace {
     Start(SpiOperation, (u16, u16)),
-    Tx(u8),
-    Rx(u8),
-    WaitISR(u32),
     None,
 }
 
@@ -52,7 +43,7 @@ struct LockState {
 fn main() -> ! {
     check_server_config();
 
-    let gpio = gpio_api::Sys::from(GPIO.get_task_id());
+    let gpio = gpio_api::GPIO::from(GPIO.get_task_id());
 
     let registers = unsafe { &*CONFIG.registers };
 
@@ -115,7 +106,7 @@ fn main() -> ! {
 
 struct ServerImpl {
     spi: spi_core::Spi,
-    gpio: gpio_api::Sys,
+    gpio: gpio_api::GPIO,
     lock_holder: Option<LockState>,
     last_device_active: usize,
 }
@@ -331,19 +322,19 @@ impl ServerImpl {
         // 
         // Combined into one, this looks like
         // - write 1 byte
-        // - loop:
-        //  - if bytes_written < transfer_size
-        //    - write 1 byte
-        //  - wait for ready event
-        //  - read 1 byte
-        //  - if bytes_read == transfer_size
-        //      - break
+        // - while bytes_written < transfer_size:
+        //   - write 1 byte
+        //   - wait for ready event
+        //   - read 1 byte
+        // - wait for ready event
+        // - read 1 byte
         // 
-        // We don't use sleeps/interrupts because it doesn't make sense
+        // We don't use interrupts because it doesn't make sense
         // right now. We're not using the DMA version of SPI, so we have
         // to do work after every byte to keep the transaction going. The
         // overhead of sleeping/interrupting for this just wouldn't make
-        // sense at 8MHz transfer speed.
+        // sense at 8MHz transfer speed, where we only have 64 clock cycles
+        // per byte.
         //
         // It would make sense at slower speeds but at that point we should
         // just rewrite the underlying SPI implementation to use the DMA
@@ -351,7 +342,6 @@ impl ServerImpl {
         // uses interrupts sometimes but not other times.
 
 
-        let mut bytes_read = 0;
         let mut bytes_written = 0;
 
         let txbyte = if let Some(txbuf) = &mut tx {
@@ -368,22 +358,20 @@ impl ServerImpl {
         self.spi.send8(txbyte);
         bytes_written += 1;
 
-        while bytes_read < transfer_size {
-            if bytes_written < transfer_size {
-                let txbyte = if let Some(txbuf) = &mut tx {
-                    if let Some(b) = txbuf.read() {
-                        b
-                    } else {
-                        // We've hit the end of the lease. Stop checking.
-                        tx = None;
-                        0
-                    }
+        while bytes_written < transfer_size {
+            let txbyte = if let Some(txbuf) = &mut tx {
+                if let Some(b) = txbuf.read() {
+                    b
                 } else {
+                    // We've hit the end of the lease. Stop checking.
+                    tx = None;
                     0
-                };
-                self.spi.send8(txbyte);
-                bytes_written += 1;
-            }
+                }
+            } else {
+                0
+            };
+            self.spi.send8(txbyte);
+            bytes_written += 1;
 
             // spinloop wheeeee
             while !self.spi.is_read_ready() {
@@ -391,7 +379,6 @@ impl ServerImpl {
 
             // read a byte
             let rxbyte = self.spi.recv8();
-            bytes_read += 1;
 
             // Deposit the byte if we're still within the bounds of the
             // caller's incoming lease.
@@ -400,6 +387,22 @@ impl ServerImpl {
                     // We're off the end. Stop checking.
                     rx = None;
                 }
+            }
+        }
+
+        // spinloop wheeeee
+        while !self.spi.is_read_ready() {
+        }
+
+        // read a byte
+        let rxbyte = self.spi.recv8();
+
+        // Deposit the byte if we're still within the bounds of the
+        // caller's incoming lease.
+        if let Some(rx_reader) = &mut rx {
+            if rx_reader.write(rxbyte).is_err() {
+                // We're off the end. Stop checking.
+                rx = None;
             }
         }
 
@@ -424,7 +427,7 @@ impl ServerImpl {
 /// you're interleaving a lot of small transactions for two devices on the same spi peripheral.
 fn activate_spi_for_device(
     dev: usize,
-    gpio: &gpio_api::Sys,
+    gpio: &gpio_api::GPIO,
     spi: &mut spi_core::Spi,
 ) {
     spi.disable();
@@ -511,12 +514,6 @@ struct DeviceDescriptor {
 
 /// Any impl of ServerConfig for Server has to pass these tests at startup.
 fn check_server_config() {
-    // TODO some of this could potentially be moved into const fns for building
-    // the tree, and thus to compile time ... if we could assert in const fns.
-    //
-    // That said, because this is analyzing constants, if the checks _pass_ this
-    // should disappear at compilation.
-
     assert!(!CONFIG.registers.is_null()); // let's start off easy.
 
     // Mux options must be provided.

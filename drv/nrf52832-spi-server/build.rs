@@ -138,8 +138,6 @@ impl ToTokens for SpiConfig {
         // to produce both identifiers.
         let devname: syn::Ident =
             syn::parse_str(&format!("SPI{}", self.controller)).unwrap();
-        let pname: syn::Ident =
-            syn::parse_str(&format!("Spi{}", self.controller)).unwrap();
 
         // We don't derive ToTokens for DeviceDescriptorConfig because it needs
         // extra knowledge (the mux_indices map) to do the conversion. Instead,

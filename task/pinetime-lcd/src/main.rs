@@ -1,21 +1,18 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
-
 #![no_std]
 #![no_main]
 
 use userlib::*;
 use drv_nrf52832_gpio_api as gpio_api;
-use drv_spi_api as spi_api;
-//use drv_nrf52832_spi as spi_core;
-//use nrf52832_pac as device;
+//use drv_spi_api as spi_api;
+use drv_nrf52832_spi as spi_core;
+use nrf52832_pac as device;
 use micromath::F32Ext;
 
 task_slot!(GPIO, gpio);
-task_slot!(SPI, spi);
+//task_slot!(SPI, spi);
 
 
+// Ignore the constant spam. this should be an enum later.
 const CMD_NOP: u8 =       0x00; // NOP
 const CMD_SWRESET: u8 =   0x01; // Software Reset
 const CMD_RDDID: u8 =     0x04; // Read Display ID
@@ -114,17 +111,16 @@ pub fn main() -> ! {
     const TIMER_NOTIFICATION: u32 = 1;
     const INTERVAL: u64 = 3000;
 
-    let mut response: u32 = 0;
+    let gpio = gpio_api::GPIO::from(GPIO.get_task_id());
 
-    let gpio = gpio_api::Sys::from(GPIO.get_task_id());
-
+    // dot unwrap
     gpio.gpio_configure_output(BACKLIGHT_LOW, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(BACKLIGHT_MED, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(BACKLIGHT_HIGH, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
-    //gpio.gpio_configure_input(MISO, gpio_api::Pull::None).unwrap();
-    //gpio.gpio_configure_output(MOSI, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
-    //gpio.gpio_configure_output(SCK, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
-    //gpio.gpio_configure_output(CHIP_SELECT, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
+    gpio.gpio_configure_input(MISO, gpio_api::Pull::None).unwrap();
+    gpio.gpio_configure_output(MOSI, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
+    gpio.gpio_configure_output(SCK, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
+    gpio.gpio_configure_output(CHIP_SELECT, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(LCD_RESET, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
     gpio.gpio_configure_output(LCD_COMMAND, gpio_api::OutputType::PushPull, gpio_api::Pull::None).unwrap();
 
@@ -138,22 +134,30 @@ pub fn main() -> ! {
     let mut msg = [0; 16];
     let mut dl = INTERVAL;
 
-    // TODO configurable device ID? Only matters of making this into a generic
-    // this creates a second spi/gpio interface so i dont have to put pointers
-    // in there or deal with moving the original ones in.
+    let registers = unsafe { &*device::SPI0::ptr() };
+    let mut spi = spi_core::Spi::from(registers);
+    spi.initialize();
+    spi.configure_transmission_parameters(
+            device::spi0::frequency::FREQUENCY_A::M8,
+            device::spi0::config::ORDER_A::MSBFIRST,
+            device::spi0::config::CPHA_A::TRAILING,
+            device::spi0::config::CPOL_A::ACTIVELOW,
+    );
+    spi.enable(MISO, MOSI, SCK);
+
     let mut lcd = Lcd {
-        spidev: 0,
-        spi: spi_api::Spi::from(SPI.get_task_id()),
-        gpio: gpio_api::Sys::from(GPIO.get_task_id()),
+        //spi: spi_api::Spi::from(SPI.get_task_id()),
+        spi,
+        gpio: gpio_api::GPIO::from(GPIO.get_task_id()),
     };
 
-    gpio.gpio_reset(1 << LCD_RESET);
+    gpio.gpio_reset(1 << LCD_RESET).unwrap();
 
     sys_set_timer(Some(dl), TIMER_NOTIFICATION);
     let msginfo = sys_recv_open(&mut msg, TIMER_NOTIFICATION);
     dl += INTERVAL;
 
-    gpio.gpio_set(1 << LCD_RESET);
+    gpio.gpio_set(1 << LCD_RESET).unwrap();
     lcd.send_command(CMD_SWRESET);
 
     sys_set_timer(Some(dl), TIMER_NOTIFICATION);
@@ -164,12 +168,7 @@ pub fn main() -> ! {
 
     lcd.set_pixel_format(PixelFormat::RGB565);
     lcd.draw_color_rect(0, 0, 240, 320, 0x0808);
-    for row in 0..320 {
-        lcd.draw_twister_line(row, row as f32 * 0.5, row as f32);
-    }
-    //lcd.draw_color_rect(20, 20, 64, 64, 0xFFFF);
-    //lcd.draw_color_rect(140, 20, 64, 64, 0xFFFF);
-    //lcd.draw_color_rect(40, 160, 140, 20, 0x0F0F);
+    lcd.draw_twister(0.0);
 
     lcd.send_command(CMD_DISPON);
     lcd.send_command(CMD_NORON);
@@ -182,15 +181,8 @@ pub fn main() -> ! {
     let mut y = 160.0;
     let mut scroll = 1;
     loop {
-        //lcd.draw_twister(time);
-
-        //time += 1.0;
-        //scroll = (scroll + 1) % 320;
-        //y += 0.5;
-        //lcd.draw_twister_line((scroll + 240) % 320, y, time);
-        //lcd.set_scroll_start(scroll);
-        lcd.draw_color_rect(0, 0, 240, 240, 0x8080);
-        lcd.draw_color_rect(0, 0, 240, 240, 0x0808);
+        lcd.draw_twister(time);
+        time += 4.0
 
         //let msginfo = sys_recv_open(&mut msg, TIMER_NOTIFICATION);
         
@@ -204,15 +196,27 @@ pub fn main() -> ! {
 }
 
 struct Lcd {
-    spidev: u8,
-    spi: spi_api::Spi,
-    gpio: gpio_api::Sys,
+    spi: spi_core::Spi,
+    gpio: gpio_api::GPIO,
 }
 
 // TODO make these things return errors instead of just unwrap
 impl Lcd {
     fn spi_write(&mut self, data: &[u8]) {
-        self.spi.write(self.spidev, data).unwrap();
+        if data.len() == 0 {
+            return;
+        }
+        self.spi.start();
+        self.spi.send8(data[0]);
+        for byte in &data[1..] {
+            self.spi.send8(*byte);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+        }
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
+
+        //self.spi.write(self.spidev, data).unwrap();
     }
 
     fn send_command(&mut self, command: u8) {
@@ -287,41 +291,48 @@ impl Lcd {
 
         self.set_window(x, y, w, h);
         self.send_command(CMD_RAMWR);
-        
-        // Transfer in up to 256-byte chunks (128 pixels)
-        const TRANSFER_BLOCK: usize = 256;
-        let mut pix_data = [0; TRANSFER_BLOCK];
+
         let repr = color.to_be_bytes();
 
-        for i in (0..TRANSFER_BLOCK).step_by(2) {
-            pix_data[i] = repr[0];
-            pix_data[i + 1] = repr[1];
+        self.gpio.gpio_set(1 << LCD_COMMAND).unwrap();
+        self.spi.start();
+        self.spi.send8(repr[0]);
+        self.spi.send8(repr[1]);
+        for _ in 1..((w as u32) * (h as u32)) {
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(repr[0]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(repr[1]);
         }
-
-        let mut bytes_remaining = (w as usize) * (h as usize) * 2;
-
-        while bytes_remaining > TRANSFER_BLOCK {
-            self.send_data(&pix_data);
-            bytes_remaining -= TRANSFER_BLOCK;
-        }
-
-        self.send_data(&pix_data[0 .. bytes_remaining]);
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
     }
 
-    fn scroll_twister(&mut self, t: f32) {
-
+    fn draw_twister(&mut self, t: f32) {
+        self.set_window(60, 0, 120, 240);
+        self.send_command(CMD_RAMWR);
+        self.gpio.gpio_set(1 << LCD_COMMAND).unwrap();
+        for row in 0..120 {
+            self.draw_twister_line(row as f32, t);
+        }
     }
 
 
-    fn draw_twister_line(&mut self, row: u16, y: f32, t: f32) {
+    fn draw_twister_line(&mut self, y: f32, t: f32) {
         const PI: f32 = 3.141592653589;
+        const PI2: f32 = PI * 2.0;
         const FRAC_PI_2: f32 = PI * 0.5;
 
 
-        // Only render to the center 120 pixels
-        let mut pix_data = [0x08; 240];
+        // Only render to the center 120 pixels, at half res
+        let mut pix_data = [0x08; 120];
 
-        let a = (PI * (y / 2000.0 + t / 300.0)).cos() * PI;
+        let a = (PI * (y / 2000.0 + t / 300.0)).cos();
+        let a_pi = a * PI2;
         //let a = (PI * (y / 300.0)).cos() * PI;
         //let a = (y + t) / 40.0;
         let deg90 = FRAC_PI_2;
@@ -330,39 +341,79 @@ impl Lcd {
 
         //let xoff = (y / 20.0).sin() * 0.25 + (y / 10.0).cos() * 0.15;
         //let xoff = y / 100.0;
-        //let xoff = (((t / 80.0) - y + 20.0 * ((t / 20000.0 + a / (120.0 + 20.0 + ((t / 100.0 + y / 500.0) * PI).sin())) * PI).sin()) * PI).cos() * 16.0 / 30.0;
-        let xoff= 0.0;
+        let xoff = (((t / 80.0) - y + 20.0 * ((t / 20000.0 + a / (120.0 + 20.0 * ((t / 100.0 + y / 500.0) * PI2).sin())) * PI2).sin()) * PI2).cos() * 0.75;
 
-        let x0 = a.sin() + xoff;
-        let x1 = (a + deg90).sin() + xoff;
-        let x2 = (a + deg180).sin() + xoff;
-        let x3 = (a + deg270).sin() + xoff;
+        let x0 = a_pi.sin() + xoff;
+        let x1 = (a_pi + deg90).sin() + xoff;
+        let x2 = (a_pi + deg180).sin() + xoff;
+        let x3 = (a_pi + deg270).sin() + xoff;
 
         let pairs = [
             TwisterPair{l: x0, r: x1, col: 0xF810_u16.to_be_bytes()},
-            TwisterPair{l: x1, r: x2, col: 0x07E0_u16.to_be_bytes()},
+            TwisterPair{l: x1, r: x2, col: 0x2104_u16.to_be_bytes()},
             TwisterPair{l: x2, r: x3, col: 0x061F_u16.to_be_bytes()},
             TwisterPair{l: x3, r: x0, col: 0xFE00_u16.to_be_bytes()},
         ];
 
         for pair in pairs {
             if pair.r > pair.l {
-                let l = (((pair.l + 1.0) * 30.0 + 30.0) as usize) * 2;
-                let r = (((pair.r + 1.0) * 30.0 + 30.0) as usize) * 2;
-                for i in 0..8 {
-                    pix_data[l + i - 4] = 0;
-                    pix_data[r + i - 4] = 0;
+                let l = (((pair.l + 1.0) * 15.0 + 15.0) as usize) * 2;
+                let r = (((pair.r + 1.0) * 15.0 + 15.0) as usize) * 2;
+                for i in 0..4 {
+                    pix_data[l + i - 2] = 0;
+                    pix_data[r + i - 2] = 0;
                 }
-                for i in ((l + 4)..(r - 4)).step_by(2) {
+                for i in ((l + 2)..(r - 2)).step_by(2) {
                     pix_data[i] = pair.col[0];
                     pix_data[i + 1] = pair.col[1];
                 }
             }
         }
 
-        self.set_window(60, row, 120, 1);
-        self.send_command(CMD_RAMWR);
-        self.send_data(&pix_data);
+        // Write out with pixel doubling
+        self.spi.send8(pix_data[0]);
+        self.spi.send8(pix_data[1]);
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
+        self.spi.send8(pix_data[0]);
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
+        self.spi.send8(pix_data[1]);
+        for i in (2..120).step_by(2) {
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i + 1]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i + 1]);
+        }
+
+        // Second row
+        for i in (0..120).step_by(2) {
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i + 1]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i]);
+            while !self.spi.is_read_ready() {}
+            let _ = self.spi.recv8();
+            self.spi.send8(pix_data[i + 1]);
+        }
+
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
+        while !self.spi.is_read_ready() {}
+        let _ = self.spi.recv8();
     }
 
 

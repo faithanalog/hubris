@@ -1,7 +1,7 @@
 // nRF52832 low level GPIO API
 
 Interface(
-    name: "Sys",
+    name: "GPIO",
     ops: {
         "gpio_configure_raw": (
             args: {
@@ -14,7 +14,7 @@ Interface(
             ),
             idempotent: true,
         ),
-        "gpio_configure_gourmet": (
+        "gpio_configure": (
             args: {
                 "pin": "u8",
                 "mode": (

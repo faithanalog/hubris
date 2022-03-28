@@ -41,18 +41,7 @@ impl TryFrom<u32> for GpioError {
     }
 }
 
-impl Sys {
-    /// Configures an individual GPIO pin
-    pub fn gpio_configure(
-        &self,
-        pin: u8,
-        mode: Mode,
-        output_type: OutputType,
-        pull: Pull,
-    ) -> Result<(), GpioError> {
-        self.gpio_configure_gourmet(pin, mode, output_type, pull)
-    }
-
+impl GPIO {
     /// Configures the pin as high-impedance digital input, with
     /// optional pull resistor.
     pub fn gpio_configure_input(

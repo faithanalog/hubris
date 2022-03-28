@@ -10,9 +10,9 @@ panic-messages = ["userlib/panic-messages"]
 cortex-m = {version = "0.7", features = ["inline-asm"]}
 userlib = {path = "../../sys/userlib"}
 drv-nrf52832-gpio-api = {path = "../../drv/nrf52832-gpio-api"}
-drv-spi-api = {path = "../../drv/spi-api"}
-#drv-nrf52832-spi = {path = "../../drv/nrf52832-spi"}
-#nrf52832-pac = { version = "0.11.0", default-features = false }
+#drv-spi-api = {path = "../../drv/spi-api"}
+drv-nrf52832-spi = {path = "../../drv/nrf52832-spi"}
+nrf52832-pac = { version = "0.11.0", default-features = false }
 micromath = { version = "2.0.0" }
 
 [[bin]]

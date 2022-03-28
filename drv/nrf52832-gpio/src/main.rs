@@ -29,9 +29,6 @@ fn main() -> ! {
     let mut buffer = [0u8; idl::INCOMING_SIZE];
     let mut server = ServerImpl { p0 };
 
-    //server.gpio_configure_output(23, iface::OutputType::PushPull, iface::Pull::None);
-    //server.gpio_set_reset(0, 1 << 23);
-
     loop {
         idol_runtime::dispatch(&mut buffer, &mut server);
     }
@@ -41,7 +38,7 @@ struct ServerImpl<'a> {
     p0: &'a device::p0::RegisterBlock,
 }
 
-impl idl::InOrderSysImpl for ServerImpl<'_> {
+impl idl::InOrderGPIOImpl for ServerImpl<'_> {
 
     /// Dumps a config into a pin's configuration register, no questions asked.
     fn gpio_configure_raw(
@@ -56,7 +53,7 @@ impl idl::InOrderSysImpl for ServerImpl<'_> {
     }
 
     /// A delectable gpio configuration experience fit for royalty
-    fn gpio_configure_gourmet(
+    fn gpio_configure(
         &mut self,
         _: &RecvMessage,
         pin: u8,

@@ -8,16 +8,6 @@ stacksize = 896
 path = "."
 name = "demo-pinetime"
 requires = {flash = 30000, ram = 3072}
-#
-# For the kernel (and for any task that logs), we are required to enable
-# either "itm" (denoting logging/panicking via ARM's Instrumentation Trace
-# Macrocell) or "semihosting" (denoting logging/panicking via ARM
-# semihosting).  We are biased to ITM because semihosting is excruciatingly
-# slow (it is breakpoint based) and has an undesirable failure mode if logging
-# output is generated and debugger is not attached (namely, the target stops).
-# If one does choose to change this to semihosting for purposes of
-# development, be sure to also change it in every task of interest.
-#
 features = ["itm"]
 
 [supervisor]
@@ -53,24 +43,12 @@ requires = {flash = 1024, ram = 1024}
 start = true
 uses = ["gpio"]
 
-#[tasks.usart_driver]
-#path = "../../drv/nRF52832-usart"
-#name = "drv-nRF52832-usart"
-#features = []
-#priority = 2
-#requires = {flash = 8192, ram = 1024}
-#uses = ["usart2", "gpioa"]
-#start = true
-#interrupts = {"usart2.irq" = 1}
-#task-slots = ["rcc_driver"]
-
 [tasks.spi]
 path = "../../drv/nrf52832-spi-server"
 name = "drv-nrf52832-spi-server"
 priority = 2
 requires = {flash = 16384, ram = 2048}
-features = ["spi0"]
-uses = ["spitwi0"]
+#uses = ["spitwi0"]
 start = true
 stacksize = 880
 task-slots = ["gpio"]
@@ -78,43 +56,14 @@ task-slots = ["gpio"]
 [tasks.spi.config.spi]
 global_config = "spi0"
 
-#[tasks.usart_driver]
-#path = "../../drv/nRF52832-usart"
-#name = "drv-nRF52832-usart"
-#features = []
-#priority = 2
-#requires = {flash = 8192, ram = 1024}
-#uses = ["usart2", "gpioa"]
-#start = true
-#interrupts = {"usart2.irq" = 1}
-#task-slots = ["rcc_driver"]
-
-
-#[tasks.ping]
-#path = "../../task/ping"
-#name = "task-ping"
-#features = ["uart"]
-#priority = 4
-#requires = {flash = 8192, ram = 1024}
-#stacksize = 512
-#start = true
-#task-slots = [{peer = "pong"}, "usart_driver"]
-#
-#[tasks.pong]
-#path = "../../task/pong"
-#name = "task-pong"
-#priority = 3
-#requires = {flash = 8192, ram = 1024}
-#start = true
-#task-slots = ["user_leds"]
-
 [tasks.lcd]
 path = "../../task/pinetime-lcd"
 name = "task-pinetime-lcd"
 priority = 3
-requires = {flash = 4096, ram = 2048}
+requires = {flash = 8192, ram = 2048}
 start = true
-task-slots = ["gpio", "spi"]
+task-slots = ["gpio"]
+uses = ["spitwi0"]
 stacksize = 1536
 
 [tasks.hiffy]
